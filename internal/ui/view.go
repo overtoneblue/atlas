@@ -54,26 +54,41 @@ func (m Model) renderTree() []string {
 		styleDim.Render(" ───────────"),
 	}
 	for i, n := range m.tree {
-		var content string
+		indent := strings.Repeat("  ", min(n.depth, 3))
+		glyph := "· "
 		switch n.kind {
+		case kindGuild:
+			glyph = "≡ "
 		case kindCategory:
-			content = " ▾ " + styleGold.Render(n.label)
+			glyph = "▾ "
 		case kindChannel:
-			content = "    " + styleChan.Render("# "+n.label)
-		case kindPost:
-			content = "      " + stylePost.Render("· "+truncLine(n.label, 20))
+			glyph = "# "
+		}
+		budget := 30 - 1 - len(indent) - len(glyph) - 1
+		label := truncLine(n.label, budget)
+		var styled string
+		switch n.kind {
+		case kindGuild:
+			styled = styleTitle.Render(label)
+		case kindCategory:
+			styled = styleGold.Render(label)
+		case kindChannel:
+			styled = styleChan.Render(label)
+		default:
+			styled = stylePost.Render(label)
 		}
 		mark := " "
 		if i == m.cursor {
 			mark = styleYel.Render("▸")
 		}
-		lines = append(lines, mark+content)
+		lines = append(lines, mark+indent+styleDim.Render(glyph)+styled)
 	}
 	lines = append(lines, "")
-	if m.client.Configured() && len(m.sessions) > 0 {
+	posts := countPosts(m.tree)
+	if posts > 0 {
 		lines = append(lines,
 			styleDim.Render(" ─────────────"),
-			styleDim.Render(fmt.Sprintf(" %d sessions · ", len(m.sessions)))+styleGreen.Render("live"),
+			styleDim.Render(fmt.Sprintf(" %d posts · ", posts))+styleGreen.Render(m.modeLabel()),
 		)
 	} else {
 		lines = append(lines,
@@ -84,11 +99,24 @@ func (m Model) renderTree() []string {
 	return lines
 }
 
+func (m Model) modeLabel() string {
+	if m.client.Configured() {
+		if m.hub.Configured() {
+			return "hub"
+		}
+		return "live"
+	}
+	return "demo"
+}
+
 func (m Model) renderTranscript(width, height int) []string {
 	var lines []string
-	if m.openIdx >= 0 && m.openIdx < len(m.sessions) {
+	switch {
+	case m.openID != "":
 		lines = m.liveTranscript(width)
-	} else {
+	case len(m.sessions) > 0 || (m.client.Configured() && m.hub.Configured()):
+		lines = hintTranscript(width)
+	default:
 		lines = demoTranscript(width)
 	}
 	// Tail-fit so the newest messages are visible.
@@ -111,11 +139,14 @@ func (m Model) renderTranscript(width, height int) []string {
 }
 
 func (m Model) liveTranscript(width int) []string {
-	s := m.sessions[m.openIdx]
+	src := "·"
+	if s := m.findSession(m.openID); s != nil {
+		src = s.Source
+	}
 	rule := strings.Repeat("─", max(8, width-2))
 	lines := []string{
-		styleTitle.Render(truncLine(sessionTitle(s), max(10, width-24))) + "  " + styleDim.Render(s.Source),
-		styleDim.Render(fmt.Sprintf("session %s · %d msgs · %s", s.ID, s.MessageCount, relTime(s.LastActive))),
+		styleTitle.Render(truncLine(m.openTitle, max(10, width-24))) + "  " + styleDim.Render(src),
+		styleDim.Render(fmt.Sprintf("session %s · %d msgs · %s", m.openID, m.openMsgs, relTime(m.openLast))),
 		styleDim.Render(" " + rule),
 		"",
 	}
@@ -131,6 +162,20 @@ func (m Model) liveTranscript(width int) []string {
 		lines = append(lines, renderMessage(msg, width)...)
 	}
 	return lines
+}
+
+func hintTranscript(width int) []string {
+	return []string{
+		styleTitle.Render(" WORKSTREAM"),
+		styleDim.Render(" ──────────"),
+		"",
+		"  select a post in the tree",
+		"  and press " + styleYel.Render("enter") + " to open",
+		"  its conversation.",
+		"",
+		styleDim.Render("  categories, channels and posts"),
+		styleDim.Render("  mirror the discord workspace."),
+	}
 }
 
 func renderMessage(msg hermes.Message, width int) []string {
@@ -159,43 +204,47 @@ func renderMessage(msg hermes.Message, width int) []string {
 }
 
 func (m Model) renderRail() []string {
-	if m.openIdx >= 0 && m.openIdx < len(m.sessions) {
-		s := m.sessions[m.openIdx]
-		return []string{
-			styleTitle.Render(" DETAILS"),
-			styleDim.Render(" ───────"),
-			kv("source", s.Source),
-			kv("msgs", fmt.Sprintf("%d", s.MessageCount)),
-			kv("active", relTime(s.LastActive)),
-			kv("session", truncLine(s.ID, 13)),
+	lines := []string{
+		styleTitle.Render(" DETAILS"),
+		styleDim.Render(" ───────"),
+	}
+	if m.openID != "" {
+		src := "·"
+		if s := m.findSession(m.openID); s != nil {
+			src = s.Source
+		}
+		lines = append(lines,
+			kv("source", src),
+			kv("msgs", fmt.Sprintf("%d", m.openMsgs)),
+			kv("active", relTime(m.openLast)),
+			kv("session", truncLine(m.openID, 13)),
 			"",
 			styleDim.Render(" ───────────"),
-			styleTitle.Render(" SESSIONS"),
-			styleGreen.Render(" ● ")+styleDim.Render(fmt.Sprintf("%d recent", len(m.sessions))),
+			styleTitle.Render(" TREE"),
+			styleGreen.Render(" ● ")+styleDim.Render(fmt.Sprintf("%d posts", countPosts(m.tree))),
 			"",
 			styleDim.Render(" ───────────"),
 			styleTitle.Render(" MODE"),
-			styleGreen.Render(" live")+styleDim.Render(" · head:8642"),
-		}
+			styleGreen.Render(" "+m.modeLabel())+styleDim.Render(" · head"),
+		)
+		return lines
 	}
-	return []string{
-		styleTitle.Render(" DETAILS"),
-		styleDim.Render(" ───────"),
-		kv("agent", "Nolan (default)"),
-		kv("model", "deepseek-v4-flash"),
-		kv("tags", "design · spike"),
-		kv("thread", "#rich-desktop › 3"),
-		kv("session", "2026…a1b2c3"),
+	lines = append(lines,
+		styleDim.Render(" select a post, press"),
+		styleDim.Render(" enter to open it"),
 		"",
 		styleDim.Render(" ───────────"),
-		styleTitle.Render(" ACTIVE RUNS"),
-		styleGreen.Render(" ● Nolan") + styleDim.Render("  rendering 41s"),
-		styleDim.Render(" ○ Debbie  idle"),
+		styleTitle.Render(" KEYS"),
+		kv("j/k", "move"),
+		kv("enter", "open"),
+		kv("R", "refresh"),
+		kv("q", "quit"),
 		"",
 		styleDim.Render(" ───────────"),
-		styleTitle.Render(" CONTEXT"),
-		" " + styleGreen.Render("▓▓▓▓▓▓") + styleFaint.Render("░░░░░░") + " 41%",
-	}
+		styleTitle.Render(" MODE"),
+		styleGreen.Render(" "+m.modeLabel())+styleDim.Render(" · head"),
+	)
+	return lines
 }
 
 func kv(k, v string) string {
@@ -214,7 +263,7 @@ func (m Model) renderComposer(width int) string {
 }
 
 func (m Model) renderStatus(width int) string {
-	left := " NORMAL · atlas 0.1.0 · " + m.status
+	left := " NORMAL · atlas 0.2.0 · " + m.status
 	right := "? help"
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1

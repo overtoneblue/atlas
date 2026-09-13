@@ -2,7 +2,7 @@ package ui
 
 import "strings"
 
-// Demo content for 0.0.1 — replaced by live Hermes data next.
+// Demo content — shown when Atlas runs without credentials.
 // The tree mirrors the server's Discord shape; the transcript mirrors the
 // investigation thread that produced this design.
 
@@ -12,7 +12,7 @@ func demoTree() []treeNode {
 		{label: "overall-hermes…", depth: 1, kind: kindChannel},
 		{label: "stats-card → Matrix", depth: 2, kind: kindPost},
 		{label: "rich-desktop…", depth: 1, kind: kindChannel},
-		{label: "TUI design & mirror", depth: 2, kind: kindPost, unread: 2},
+		{label: "TUI design & mirror", depth: 2, kind: kindPost},
 		{label: "Investigation kickoff", depth: 2, kind: kindPost},
 		{label: "pi-harness eval notes", depth: 2, kind: kindPost},
 		{label: "internal-tools", depth: 1, kind: kindChannel},

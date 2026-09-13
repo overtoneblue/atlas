@@ -8,8 +8,21 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.1.0 — live wiring.** Sessions and transcripts come from the Hermes
-API server. Streaming turns + composer next.
+Status: **0.2.0 — Discord-shaped tree.** The left pane mirrors the real
+Discord structure (server → category → channel → forum post) assembled by
+`hub/atlas-hub.py`; the center pane shows live session transcripts.
+
+## Hub
+
+`hub/atlas-hub.py` (stdlib python3) serves the workstream tree on
+`127.0.0.1:8643` by combining the Hermes `state.db` (session ↔ thread
+bindings, opened read-only) with the Discord REST API (server structure).
+Run it on the Hermes host. Without it Atlas falls back to a flat session
+list.
+
+```console
+$ HERMES_HOME=~/.hermes python3 hub/atlas-hub.py   # as the hermes user
+```
 
 ## Run
 

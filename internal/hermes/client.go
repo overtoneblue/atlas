@@ -33,6 +33,16 @@ func NewFromEnv() *Client {
 	if base == "" {
 		base = "http://127.0.0.1:8642"
 	}
+	key := resolveKey()
+	return &Client{
+		BaseURL: strings.TrimRight(base, "/"),
+		Key:     key,
+		HTTP:    &http.Client{Timeout: 15 * time.Second},
+	}
+}
+
+// resolveKey finds the API bearer key: env -> ~/.config/atlas/env -> hermes home .env.
+func resolveKey() string {
 	key := strings.TrimSpace(os.Getenv("ATLAS_API_KEY"))
 	if key == "" {
 		key = readKeyFromEnvFile(configEnvPath())
@@ -40,11 +50,7 @@ func NewFromEnv() *Client {
 	if key == "" {
 		key = readKeyFromEnvFile(hermesEnvPath())
 	}
-	return &Client{
-		BaseURL: strings.TrimRight(base, "/"),
-		Key:     key,
-		HTTP:    &http.Client{Timeout: 15 * time.Second},
-	}
+	return key
 }
 
 // Configured reports whether we have what we need to go live.
