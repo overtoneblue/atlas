@@ -3,9 +3,12 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"atlas/internal/hermes"
 )
 
 // View renders the live TUI (bubbletea wiring).
@@ -33,7 +36,7 @@ func (m Model) RenderFrame(width, height int) string {
 	sep := strings.TrimSuffix(strings.Repeat(styleSep.Render("│")+"\n", contentH), "\n")
 
 	left := padBlock(strings.Join(m.renderTree(), "\n"), leftW, contentH)
-	mid := padBlock(strings.Join(demoTranscript(midW), "\n"), midW, contentH)
+	mid := padBlock(strings.Join(m.renderTranscript(midW, contentH), "\n"), midW, contentH)
 
 	blocks := []string{left, sep, mid}
 	if showRail {
@@ -58,10 +61,7 @@ func (m Model) renderTree() []string {
 		case kindChannel:
 			content = "    " + styleChan.Render("# "+n.label)
 		case kindPost:
-			content = "      " + stylePost.Render("· "+n.label)
-			if n.unread > 0 {
-				content += " " + styleGreen.Render(fmt.Sprintf("%d", n.unread))
-			}
+			content = "      " + stylePost.Render("· "+truncLine(n.label, 20))
 		}
 		mark := " "
 		if i == m.cursor {
@@ -69,15 +69,115 @@ func (m Model) renderTree() []string {
 		}
 		lines = append(lines, mark+content)
 	}
-	lines = append(lines,
-		"",
-		styleDim.Render(" ─────────────"),
-		styleDim.Render(" 2 runs · ")+styleGreen.Render("3")+styleDim.Render(" unread"),
-	)
+	lines = append(lines, "")
+	if m.client.Configured() && len(m.sessions) > 0 {
+		lines = append(lines,
+			styleDim.Render(" ─────────────"),
+			styleDim.Render(fmt.Sprintf(" %d sessions · ", len(m.sessions)))+styleGreen.Render("live"),
+		)
+	} else {
+		lines = append(lines,
+			styleDim.Render(" ─────────────"),
+			styleDim.Render(" 2 runs · ")+styleGreen.Render("3")+styleDim.Render(" unread"),
+		)
+	}
 	return lines
 }
 
+func (m Model) renderTranscript(width, height int) []string {
+	var lines []string
+	if m.openIdx >= 0 && m.openIdx < len(m.sessions) {
+		lines = m.liveTranscript(width)
+	} else {
+		lines = demoTranscript(width)
+	}
+	// Tail-fit so the newest messages are visible.
+	if len(lines) > height {
+		keep := height - 5
+		if keep < 4 {
+			keep = 4
+		}
+		tail := lines[len(lines)-keep:]
+		head := lines[:3]
+		lines = append(append([]string{}, head...),
+			styleDim.Render(fmt.Sprintf("  ↕ %d earlier lines (scrolling lands next)", len(lines)-keep-3)))
+		lines = append(lines, "")
+		lines = append(lines, tail...)
+	}
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	return lines
+}
+
+func (m Model) liveTranscript(width int) []string {
+	s := m.sessions[m.openIdx]
+	rule := strings.Repeat("─", max(8, width-2))
+	lines := []string{
+		styleTitle.Render(truncLine(sessionTitle(s), max(10, width-24))) + "  " + styleDim.Render(s.Source),
+		styleDim.Render(fmt.Sprintf("session %s · %d msgs · %s", s.ID, s.MessageCount, relTime(s.LastActive))),
+		styleDim.Render(" " + rule),
+		"",
+	}
+	if len(m.messages) == 0 {
+		lines = append(lines, styleFaint.Render("  loading transcript…"))
+		return lines
+	}
+	msgs := m.messages
+	if len(msgs) > 120 {
+		msgs = msgs[len(msgs)-120:]
+	}
+	for _, msg := range msgs {
+		lines = append(lines, renderMessage(msg, width)...)
+	}
+	return lines
+}
+
+func renderMessage(msg hermes.Message, width int) []string {
+	var out []string
+	ts := hmTime(msg.Timestamp)
+	switch msg.Role {
+	case "user":
+		out = append(out, styleBlu.Render(" Overtoneblue")+styleDim.Render(" · "+ts))
+		out = append(out, wrapIndent(cleanText(msg.Content), width, "   ", 6)...)
+		out = append(out, "")
+	case "assistant":
+		out = append(out, styleMauve.Render(" Nolan")+styleDim.Render(" · "+ts))
+		if c := cleanText(msg.Content); c != "" {
+			out = append(out, wrapIndent(c, width, "   ", 10)...)
+		}
+		for _, tc := range msg.ToolCalls {
+			out = append(out, styleMag.Render("   ▸ tool · "+tc.Function.Name))
+		}
+		out = append(out, "")
+	case "tool":
+		first := firstLine(cleanText(msg.Content))
+		out = append(out, styleDim.Render("   ↳ "+truncLine(first, max(8, width-8))))
+	default:
+	}
+	return out
+}
+
 func (m Model) renderRail() []string {
+	if m.openIdx >= 0 && m.openIdx < len(m.sessions) {
+		s := m.sessions[m.openIdx]
+		return []string{
+			styleTitle.Render(" DETAILS"),
+			styleDim.Render(" ───────"),
+			kv("source", s.Source),
+			kv("msgs", fmt.Sprintf("%d", s.MessageCount)),
+			kv("active", relTime(s.LastActive)),
+			kv("session", truncLine(s.ID, 13)),
+			"",
+			styleDim.Render(" ───────────"),
+			styleTitle.Render(" SESSIONS"),
+			styleGreen.Render(" ● ")+styleDim.Render(fmt.Sprintf("%d recent", len(m.sessions))),
+			"",
+			styleDim.Render(" ───────────"),
+			styleTitle.Render(" MODE"),
+			styleGreen.Render(" live")+styleDim.Render(" · head:8642"),
+		}
+	}
 	return []string{
 		styleTitle.Render(" DETAILS"),
 		styleDim.Render(" ───────"),
@@ -114,7 +214,7 @@ func (m Model) renderComposer(width int) string {
 }
 
 func (m Model) renderStatus(width int) string {
-	left := " NORMAL · atlas 0.0.1 · " + m.status
+	left := " NORMAL · atlas 0.1.0 · " + m.status
 	right := "? help"
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1
@@ -139,4 +239,118 @@ func padBlock(block string, width, height int) string {
 		out[i] = line + strings.Repeat(" ", max(0, width-ansi.StringWidth(line)))
 	}
 	return strings.Join(out, "\n")
+}
+
+// ---- text helpers ----
+
+func hmTime(ts float64) string {
+	if ts <= 0 {
+		return ""
+	}
+	return time.Unix(int64(ts), 0).Local().Format("3:04 PM")
+}
+
+func relTime(ts float64) string {
+	if ts <= 0 {
+		return "?"
+	}
+	d := time.Since(time.Unix(int64(ts), 0))
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
+func cleanText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	s = strings.ReplaceAll(s, "\t", "  ")
+	return strings.TrimSpace(s)
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+func truncLine(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= w {
+		return s
+	}
+	if w == 1 {
+		return "…"
+	}
+	return string(r[:w-1]) + "…"
+}
+
+// wrapIndent word-wraps text (keeping embedded newlines as paragraph breaks)
+// under an indent, capping at maxLines with an ellipsis marker.
+func wrapIndent(text string, width int, indent string, maxLines int) []string {
+	avail := width - ansi.StringWidth(indent) - 1
+	if avail < 8 {
+		avail = 8
+	}
+	var out []string
+	truncated := false
+	for _, para := range strings.Split(text, "\n") {
+		para = strings.TrimRight(para, " \t")
+		if para == "" {
+			if len(out) < maxLines && len(out) > 0 {
+				out = append(out, "")
+			}
+			continue
+		}
+		line := ""
+		for _, w := range strings.Fields(para) {
+			if len([]rune(w)) > avail {
+				w = truncLine(w, avail)
+			}
+			switch {
+			case line == "":
+				line = w
+			case ansi.StringWidth(line)+1+ansi.StringWidth(w) <= avail:
+				line += " " + w
+			default:
+				if len(out) >= maxLines-1 {
+					truncated = true
+					break
+				}
+				out = append(out, indent+line)
+				line = w
+			}
+			if truncated {
+				break
+			}
+		}
+		if truncated {
+			break
+		}
+		if line != "" {
+			out = append(out, indent+line)
+		}
+		if len(out) >= maxLines {
+			truncated = true
+			break
+		}
+	}
+	if truncated && len(out) > 0 {
+		last := out[len(out)-1]
+		out[len(out)-1] = ansi.Truncate(last, width-3, "")+" …"
+	}
+	if len(out) > maxLines {
+		out = out[:maxLines]
+	}
+	return out
 }

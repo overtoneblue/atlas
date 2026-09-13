@@ -8,7 +8,8 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.0.1 — skeleton.** UI shell + packaging. Live Hermes wiring next.
+Status: **0.1.0 — live wiring.** Sessions and transcripts come from the Hermes
+API server. Streaming turns + composer next.
 
 ## Run
 
@@ -23,8 +24,18 @@ $ atlas --once --width 128 --height 40
 Development (without nix):
 
 ```console
-$ go build ./... && ./atlas
+$ go build -o atlas . && ./atlas
 ```
+
+## Live mode
+
+Atlas finds its API credentials in this order:
+
+1. `ATLAS_API_KEY` / `ATLAS_API_URL` environment variables
+2. `~/.config/atlas/env` (KEY=VALUE lines)
+3. the active hermes home `.env` (when running as the hermes user)
+
+Without a key it falls back to demo data.
 
 ## Keys (v0)
 

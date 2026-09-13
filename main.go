@@ -17,7 +17,7 @@ import (
 	"atlas/internal/ui"
 )
 
-const version = "0.0.1"
+const version = "0.1.0"
 
 func main() {
 	var (
@@ -39,6 +39,7 @@ func main() {
 		// Piped output loses TTY color detection; force truecolor so the
 		// frame captures the way it looks in a real terminal.
 		lipgloss.SetColorProfile(termenv.TrueColor)
+		m = m.LoadSync()
 		fmt.Print(m.RenderFrame(*width, *height))
 		return
 	}
