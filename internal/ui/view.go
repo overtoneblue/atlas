@@ -113,37 +113,41 @@ func (m Model) modeLabel() string {
 }
 
 func (m Model) renderTranscript(width, height int) []string {
-	var lines []string
+	if m.searchMode {
+		return m.searchOverlay(width, height)
+	}
+	var full []string
 	switch {
 	case m.helpVisible:
-		lines = helpLines(width)
+		full = helpLines(width)
 	case m.openID != "":
-		lines = m.liveTranscript(width)
+		full = m.liveTranscript(width)
 	case len(m.sessions) > 0 || (m.client.Configured() && m.hub.Configured()):
-		lines = hintTranscript(width)
+		full = hintTranscript(width)
 	default:
-		lines = demoTranscript(width)
+		full = demoTranscript(width)
 	}
-	// Tail-fit so the newest messages are visible.
-	if len(lines) > height {
-		keep := height - 5
-		if keep < 4 {
-			keep = 4
-		}
-		tail := lines[len(lines)-keep:]
-		head := lines[:3]
-		lines = append(append([]string{}, head...),
-			styleDim.Render(fmt.Sprintf("  ↕ %d earlier lines (scrolling lands next)", len(lines)-keep-3)))
-		lines = append(lines, "")
-		lines = append(lines, tail...)
+	maxScroll := max(0, len(full)-height)
+	scroll := clampInt(m.scroll, 0, maxScroll)
+	start := len(full) - height - scroll
+	if start < 0 {
+		start = 0
 	}
-	if len(lines) > height {
-		lines = lines[:height]
+	end := start + height
+	if end > len(full) {
+		end = len(full)
 	}
-	return lines
+	return append([]string{}, full[start:end]...)
 }
 
 func (m Model) liveTranscript(width int) []string {
+	lines, _ := m.transcriptLines(width)
+	return lines
+}
+
+// transcriptLines builds the full transcript body plus a message-id → first
+// line index map (used for search jumps and scroll math).
+func (m Model) transcriptLines(width int) ([]string, map[int]int) {
 	src := "·"
 	if s := m.findSession(m.openID); s != nil {
 		src = s.Source
@@ -155,16 +159,18 @@ func (m Model) liveTranscript(width int) []string {
 		styleDim.Render(" " + rule),
 		"",
 	}
+	idx := map[int]int{}
 	if len(m.messages) == 0 && !m.streaming {
 		lines = append(lines, styleFaint.Render("  loading transcript…"))
-		return lines
+		return lines, idx
 	}
 	msgs := m.messages
-	if len(msgs) > 120 {
-		msgs = msgs[len(msgs)-120:]
+	if len(msgs) > 400 {
+		msgs = msgs[len(msgs)-400:]
 	}
 	for _, msg := range msgs {
-		lines = append(lines, renderMessage(msg, width)...)
+		idx[msg.ID] = len(lines)
+		lines = append(lines, renderMessage(msg, width, m.expandAll)...)
 	}
 	if m.lastCard != "" && m.cardFor == m.openID {
 		for _, l := range wrapIndent(m.lastCard, width, "  ", 4) {
@@ -180,7 +186,7 @@ func (m Model) liveTranscript(width int) []string {
 		lines = append(lines, wrapIndent(buf+"▍", width, "   ", 40)...)
 		lines = append(lines, "")
 	}
-	return lines
+	return lines, idx
 }
 
 func hintTranscript(width int) []string {
@@ -203,14 +209,17 @@ func helpLines(width int) []string {
 		styleTitle.Render(" ATLAS — KEYMAP") + styleDim.Render("   esc closes"),
 		styleDim.Render(" " + rule),
 		"",
-		"  " + styleYel.Render(fmt.Sprintf("%-9s", "j / k")) + " move through the tree",
-		"  " + styleYel.Render(fmt.Sprintf("%-9s", "g / G")) + " first / last row",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "j / k")) + " move tree · scroll transcript",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "tab")) + " focus: tree ⇄ transcript",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "g / G")) + " first / last · top / bottom",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "pgup/dn")) + " scroll a screenful",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " open the selected post",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "/")) + " search all sessions (enter → jump)",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "e")) + " expand long messages",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "i")) + " insert mode — write a message",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " send it (while in insert mode)",
-		"  " + styleYel.Render(fmt.Sprintf("%-9s", "esc")) + " leave insert · detach a stream",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "esc")) + " leave insert · detach · back to bottom",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "R")) + " refresh tree + sessions",
-		"  " + styleYel.Render(fmt.Sprintf("%-9s", "tab")) + " cycle focus panes",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "?")) + " this panel",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "q")) + " quit",
 		"",
@@ -219,34 +228,122 @@ func helpLines(width int) []string {
 	}
 }
 
-func renderMessage(msg hermes.Message, width int) []string {
+func renderMessage(msg hermes.Message, width int, expand bool) []string {
+	userMax, asstMax, reasonMax := 6, 10, 3
+	if expand {
+		userMax, asstMax, reasonMax = 400, 600, 12
+	}
 	var out []string
 	ts := hmTime(msg.Timestamp)
 	switch msg.Role {
 	case "user":
 		out = append(out, styleBlu.Render(" Overtoneblue")+styleDim.Render(" · "+ts))
-		out = append(out, wrapIndent(cleanText(msg.Content), width, "   ", 6)...)
+		out = append(out, wrapIndent(cleanText(string(msg.Content)), width, "   ", userMax)...)
 		out = append(out, "")
 	case "assistant":
 		out = append(out, styleMauve.Render(" Nolan")+styleDim.Render(" · "+ts))
-		if r := cleanText(msg.Reasoning); r != "" {
-			for _, l := range wrapIndent("💭 "+r, width, "   ", 3) {
+		if r := cleanText(string(msg.Reasoning)); r != "" {
+			for _, l := range wrapIndent("💭 "+r, width, "   ", reasonMax) {
 				out = append(out, styleFaint.Render(l))
 			}
 		}
-		if c := cleanText(msg.Content); c != "" {
-			out = append(out, wrapIndent(c, width, "   ", 10)...)
+		if c := cleanText(string(msg.Content)); c != "" {
+			out = append(out, wrapIndent(c, width, "   ", asstMax)...)
 		}
 		for _, tc := range msg.ToolCalls {
 			out = append(out, styleMag.Render("   ▸ "+toolLabel(tc.Function.Name, tc.Function.Arguments)))
 		}
 		out = append(out, "")
 	case "tool":
-		first := firstLine(cleanText(msg.Content))
+		first := firstLine(cleanText(string(msg.Content)))
 		out = append(out, styleDim.Render("   ↳ "+truncLine(first, max(8, width-8))))
 	default:
 	}
 	return out
+}
+
+func (m Model) midWidth() int {
+	showRail := m.width >= 100
+	leftW, railW := 30, 26
+	if !showRail {
+		railW = 0
+	}
+	seps := 1
+	if showRail {
+		seps = 2
+	}
+	return m.width - leftW - railW - seps
+}
+
+// jumpScrollFor computes the scroll offset that puts message msgID at the top
+// of the transcript window.
+func (m Model) jumpScrollFor(msgID int) int {
+	width := m.midWidth()
+	height := m.height - 4 // transcript height (minus status + composer box)
+	if width < 20 || height < 6 {
+		return 0
+	}
+	lines, idx := m.transcriptLines(width)
+	i, ok := idx[msgID]
+	if !ok {
+		return 0
+	}
+	maxScroll := max(0, len(lines)-height)
+	return clampInt(len(lines)-height-i, 0, maxScroll)
+}
+
+func (m Model) searchOverlay(width, height int) []string {
+	rule := strings.Repeat("─", max(8, width-2))
+	lines := []string{
+		styleTitle.Render(" SEARCH") + styleDim.Render("   enter run/open · ↑↓ pick · esc close"),
+		styleDim.Render(" " + rule),
+		"  " + styleYel.Render("❯ ") + m.searchQuery + styleYel.Render("▍"),
+		"",
+	}
+	if m.searching {
+		lines = append(lines, styleFaint.Render("  searching…"))
+		return lines
+	}
+	if len(m.searchHits) == 0 {
+		if strings.TrimSpace(m.searchQuery) != "" {
+			lines = append(lines, styleDim.Render("  enter to search · results from all sessions"))
+		} else {
+			lines = append(lines, styleDim.Render("  find anything in any session — full-text"))
+		}
+		return lines
+	}
+	for i, h := range m.searchHits {
+		if len(lines) >= height {
+			break
+		}
+		head := truncLine(h.Title, 22)
+		snip := firstLine(cleanText(h.Snippet))
+		if snip == "" {
+			snip = "(" + h.Role + ")"
+		}
+		row := fmt.Sprintf("%-22s %-5s %s", head, relTime(h.Timestamp), truncLine(snip, width-36))
+		mark := "  "
+		st := styleDim
+		if h.SessionID == m.openID {
+			st = styleGreen
+		}
+		if i == m.searchSel {
+			mark = styleYel.Render("▸ ")
+			st = styleYel
+		}
+		lines = append(lines, mark+st.Render(row))
+	}
+	return lines
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // toolEmojis mirrors the gateway's per-tool display emojis (registry default ⚙️).
@@ -381,7 +478,17 @@ func (m Model) renderStatus(width int) string {
 	if m.streaming {
 		mode = "STREAM"
 	}
-	left := " " + mode + " · atlas 0.5.1 · " + m.status
+	foc := "tree"
+	if m.focus == 1 {
+		foc = "transcript"
+		if m.scroll > 0 {
+			foc = fmt.Sprintf("transcript ↑%d", m.scroll)
+		}
+	}
+	if m.searchMode {
+		foc = "search"
+	}
+	left := " " + mode + " · " + foc + " · atlas 0.6.0 · " + m.status
 	right := "? help"
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1

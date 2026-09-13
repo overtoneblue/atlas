@@ -483,6 +483,60 @@ def mirror_turn(session_id: str, since: float, dry: bool = False):
         time.sleep(0.5)
 
 
+def _fts_query(q: str) -> str:
+    import re
+
+    toks = [t for t in re.split(r"\s+", q.strip()) if t]
+    if not toks:
+        return ""
+    quoted = ['"' + t.replace('"', '""') + '"' for t in toks]
+    quoted[-1] += "*"
+    return " ".join(quoted)
+
+
+def search_messages(q: str, limit: int = 40):
+    """Full-text search over session messages (FTS5, LIKE fallback)."""
+    fts = _fts_query(q)
+    if not fts:
+        return {"ok": True, "results": []}
+    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        try:
+            rows = con.execute(
+                "SELECT m.id AS message_id, m.session_id, m.role, m.timestamp, "
+                "snippet(messages_fts, 0, '', '', '…', 14) AS snip, s.title "
+                "FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid "
+                "LEFT JOIN sessions s ON s.id = m.session_id "
+                "WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?",
+                (fts, int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            like = f"%{q.strip()}%"
+            rows = con.execute(
+                "SELECT id AS message_id, session_id, role, timestamp, "
+                "substr(content, 1, 140) AS snip, (SELECT title FROM sessions s WHERE s.id = messages.session_id) AS title "
+                "FROM messages WHERE content LIKE ? ORDER BY id DESC LIMIT ?",
+                (like, int(limit)),
+            ).fetchall()
+    finally:
+        con.close()
+    return {
+        "ok": True,
+        "results": [
+            {
+                "message_id": r["message_id"],
+                "session_id": r["session_id"],
+                "role": r["role"],
+                "timestamp": r["timestamp"],
+                "snippet": r["snip"],
+                "title": r["title"],
+            }
+            for r in rows
+        ],
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.split("?")[0] == "/stats/card":
@@ -514,6 +568,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/health":
             self._json(200, {"ok": True, "service": "atlas-hub"})
+            return
+        if self.path.split("?")[0] == "/search":
+            if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
+                self._json(401, {"error": "unauthorized"})
+                return
+            try:
+                from urllib.parse import parse_qs, urlparse
+
+                q = parse_qs(urlparse(self.path).query)
+                query = (q.get("q") or [""])[0]
+                limit = int((q.get("limit") or ["40"])[0] or 40)
+                self._json(200, search_messages(query, limit))
+            except Exception as e:
+                self._json(500, {"error": str(e)})
             return
         if self.path.split("?")[0] == "/tree":
             if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":

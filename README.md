@@ -8,11 +8,10 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.5.0 — native-parity mirror.** A turn sent from Atlas relays into
-the thread exactly like a native one: reasoning in Discord's `-# 💭` subtext,
-tool lines with emojis (`💻 terminal`, `🔧 patch([...])`), the reply, and the
-`⚡ tok/s` stats card from the hermes-stats recorder — and Atlas renders the
-same reasoning, tool previews and card in its own transcript.
+Status: **0.6.0 — transcript livable.** Scrollback with focus (`tab` → `j/k`, `pgup/dn`,
+`g/G`), `e` to expand long messages, and `/` full-text search across every
+session with jump-to-result. Plus the 0.5.0 native-parity mirror (reasoning,
+tool lines, stats card relayed both ways).
 
 ## Mirror
 
@@ -65,13 +64,16 @@ Without a key it falls back to demo data.
 
 | Key | Action |
 | --- | --- |
-| `j` / `k`, `↓` / `↑` | move in the workstream tree |
-| `g` / `G` | jump to top / bottom |
-| `tab` / `shift+tab` | cycle pane focus |
+| `j` / `k`, `↓` / `↑` | move the tree · scroll the transcript (focused) |
+| `tab` / `shift+tab` | focus: tree ⇄ transcript |
+| `g` / `G` | first / last row · scroll top / bottom |
+| `pgup` / `pgdn` | scroll a screenful |
 | `enter` | open the selected post |
+| `/` | full-text search all sessions — `enter` to jump to a hit |
+| `e` | expand / collapse long messages |
 | `i` | insert mode — write a message |
 | `enter` (insert) | send it — runs a turn, streams the reply |
-| `esc` | leave insert · detach a running stream |
+| `esc` | leave insert · detach a running stream · back to bottom |
 | `R` | refresh tree + sessions |
 | `?` | full keymap panel |
 | `q` / `ctrl+c` | quit |

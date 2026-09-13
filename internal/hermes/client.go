@@ -69,13 +69,44 @@ type Session struct {
 }
 
 type Message struct {
-	ID        int        `json:"id"`
-	Role      string     `json:"role"`
-	Content   string     `json:"content"`
-	ToolName  string     `json:"tool_name"`
-	ToolCalls []ToolCall `json:"tool_calls"`
-	Reasoning string     `json:"reasoning"`
-	Timestamp float64    `json:"timestamp"`
+	ID        int          `json:"id"`
+	Role      string       `json:"role"`
+	Content   FlexibleText `json:"content"`
+	ToolName  string       `json:"tool_name"`
+	ToolCalls []ToolCall   `json:"tool_calls"`
+	Reasoning FlexibleText `json:"reasoning"`
+	Timestamp float64      `json:"timestamp"`
+}
+
+// FlexibleText accepts either a plain string or a multimodal array of parts
+// (as returned for messages that carry images/blocks).
+type FlexibleText string
+
+func (t *FlexibleText) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*t = FlexibleText(s)
+		return nil
+	}
+	var parts []map[string]any
+	if err := json.Unmarshal(b, &parts); err != nil {
+		*t = FlexibleText(string(b))
+		return nil
+	}
+	var sb strings.Builder
+	for _, p := range parts {
+		if s, ok := p["text"].(string); ok && s != "" {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(s)
+		}
+	}
+	*t = FlexibleText(sb.String())
+	return nil
 }
 
 type ToolCall struct {

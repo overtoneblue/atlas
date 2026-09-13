@@ -60,6 +60,16 @@ type Model struct {
 	turnStart float64
 	lastCard  string
 	cardFor   string
+
+	// transcript interaction
+	scroll      int
+	expandAll   bool
+	jumpMsgID   int
+	searchMode  bool
+	searchQuery string
+	searchHits  []hermes.SearchHit
+	searchSel   int
+	searching   bool
 }
 
 // New returns the initial model.
@@ -181,6 +191,18 @@ func mirrorTurnCmd(h *hermes.Hub, sessionID string, since float64) tea.Cmd {
 	}
 }
 
+type searchMsg struct {
+	hits []hermes.SearchHit
+	err  error
+}
+
+func searchCmd(h *hermes.Hub, q string) tea.Cmd {
+	return func() tea.Msg {
+		hits, err := h.Search(context.Background(), q, 40)
+		return searchMsg{hits: hits, err: err}
+	}
+}
+
 func waitStream(ch chan hermes.ChatEvent) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
@@ -242,6 +264,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.openID == msg.sessionID {
 			m.messages = msg.messages
+			if m.jumpMsgID != 0 {
+				m.scroll = m.jumpScrollFor(m.jumpMsgID)
+				m.jumpMsgID = 0
+			}
 		}
 	case streamEventMsg:
 		switch msg.ev.Event {
@@ -292,7 +318,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(cmds) > 0 {
 			return m, tea.Batch(cmds...)
 		}
+	case searchMsg:
+		m.searching = false
+		if msg.err != nil {
+			m.status = "search failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.searchHits = msg.hits
+		m.searchSel = 0
+		if len(msg.hits) == 0 {
+			m.status = "no matches"
+		} else {
+			m.status = fmt.Sprintf("%d matches — ↑↓ pick · enter opens", len(msg.hits))
+		}
+		return m, nil
 	case tea.KeyMsg:
+		if m.searchMode {
+			return m.updateSearch(msg)
+		}
 		if m.helpVisible {
 			switch msg.String() {
 			case "?", "esc", "q":
@@ -312,20 +355,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "insert — type a message, enter sends"
 		case "?":
 			m.helpVisible = true
+		case "/":
+			m.searchMode = true
+			m.searchQuery = ""
+			m.searchHits = nil
+			m.searchSel = 0
+			m.status = "search — type a query, enter runs it"
+		case "e":
+			m.expandAll = !m.expandAll
 		case "esc":
-			m.interrupt()
+			if m.streaming {
+				m.interrupt()
+			} else {
+				m.scroll = 0
+				m.status = "bottom"
+			}
 		case "j", "down":
-			if m.cursor < len(m.tree)-1 {
-				m.cursor++
-			}
+			m = m.moveDown()
 		case "k", "up":
-			if m.cursor > 0 {
-				m.cursor--
-			}
+			m = m.moveUp()
+		case "pgdown":
+			m.scroll = clampInt(m.scroll-10, 0, 1<<30)
+		case "pgup":
+			m.scroll += 10
 		case "g":
-			m.cursor = 0
+			if m.focus == 1 {
+				m.scroll = 1 << 30 // clamped at render
+			} else {
+				m.cursor = 0
+			}
 		case "G":
-			if len(m.tree) > 0 {
+			if m.focus == 1 {
+				m.scroll = 0
+			} else if len(m.tree) > 0 {
 				m.cursor = len(m.tree) - 1
 			}
 		case "R":
@@ -343,17 +405,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 			m.status = "nothing to refresh (demo mode)"
-		case "tab":
-			m.focus = (m.focus + 1) % 3
-		case "shift+tab":
-			m.focus = (m.focus + 2) % 3
+		case "tab", "shift+tab":
+			m.focus = (m.focus + 1) % 2
 		case "enter":
 			if cmd := m.openSelection(); cmd != nil {
 				return m, cmd
 			}
+		default:
+			// Burst input (fast repeats, pastes) arrives as one multi-rune
+			// KeyMsg; apply per-rune movement so kkkk / jjjj all land.
+			for _, r := range msg.Runes {
+				switch r {
+				case 'j':
+					m = m.moveDown()
+				case 'k':
+					m = m.moveUp()
+				}
+			}
 		}
 	}
 	return m, nil
+}
+
+func (m Model) moveDown() Model {
+	if m.focus == 1 {
+		if m.scroll > 0 {
+			m.scroll--
+		}
+		return m
+	}
+	if m.cursor < len(m.tree)-1 {
+		m.cursor++
+	}
+	return m
+}
+
+func (m Model) moveUp() Model {
+	if m.focus == 1 {
+		m.scroll++
+		return m
+	}
+	if m.cursor > 0 {
+		m.cursor--
+	}
+	return m
 }
 
 func (m Model) updateInsert(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -399,19 +494,97 @@ func (m Model) updateInsert(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	hasResults := !m.searching && len(m.searchHits) > 0
+	switch msg.String() {
+	case "ctrl+c":
+		m.interrupt()
+		return m, tea.Quit
+	case "esc":
+		m.searchMode = false
+		m.searchQuery = ""
+		m.searchHits = nil
+		m.searchSel = 0
+		m.status = "normal"
+		return m, nil
+	case "enter":
+		if m.searching {
+			return m, nil
+		}
+		if hasResults {
+			hit := m.searchHits[clampInt(m.searchSel, 0, len(m.searchHits)-1)]
+			m.searchMode = false
+			m.searchQuery = ""
+			m.searchHits = nil
+			m.searchSel = 0
+			return m, m.jumpTo(hit)
+		}
+		if q := strings.TrimSpace(m.searchQuery); q != "" && m.hub.Configured() {
+			m.searching = true
+			m.status = "searching…"
+			return m, searchCmd(m.hub, q)
+		}
+		return m, nil
+	case "up":
+		if hasResults && m.searchSel > 0 {
+			m.searchSel--
+		}
+		return m, nil
+	case "down":
+		if hasResults && m.searchSel < len(m.searchHits)-1 {
+			m.searchSel++
+		}
+		return m, nil
+	case "backspace":
+		if len(m.searchQuery) > 0 {
+			r := []rune(m.searchQuery)
+			m.searchQuery = string(r[:len(r)-1])
+			m.searchHits = nil
+		}
+		return m, nil
+	case "space":
+		m.searchQuery += " "
+		m.searchHits = nil
+		return m, nil
+	default:
+		if len(msg.Runes) > 0 {
+			m.searchQuery += string(msg.Runes)
+			m.searchHits = nil
+		}
+		return m, nil
+	}
+}
+
+// jumpTo opens the hit's session (if needed) and scrolls to the message.
+func (m *Model) jumpTo(hit hermes.SearchHit) tea.Cmd {
+	if hit.SessionID == m.openID {
+		m.jumpMsgID = hit.MessageID
+		m.scroll = m.jumpScrollFor(hit.MessageID)
+		m.jumpMsgID = 0
+		m.status = fmt.Sprintf("jumped to message %d", hit.MessageID)
+		return nil
+	}
+	n := treeNode{label: hit.Title, kind: kindPost, sessionID: hit.SessionID}
+	cmd := m.open(n)
+	m.jumpMsgID = hit.MessageID
+	m.status = "opening " + hit.Title
+	return cmd
+}
+
 // beginTurn echoes the user message and starts an SSE turn on the open session.
 func (m *Model) beginTurn(text string) tea.Cmd {
 	m.streaming = true
 	m.streamBuf = ""
 	m.messages = append(m.messages, hermes.Message{
 		Role:      "user",
-		Content:   text,
+		Content:   hermes.FlexibleText(text),
 		Timestamp: float64(time.Now().Unix()),
 	})
 	m.status = "streaming…"
 	m.turnStart = float64(time.Now().Unix()) - 1
 	m.lastCard = ""
 	m.cardFor = ""
+	m.scroll = 0
 	ctx, cancel := context.WithCancel(context.Background())
 	m.streamCancel = cancel
 	ch := make(chan hermes.ChatEvent, 256)
@@ -466,6 +639,7 @@ func (m *Model) open(n treeNode) tea.Cmd {
 	m.openMsgs = n.msgCount
 	m.openLast = n.lastActive
 	m.messages = nil
+	m.scroll = 0
 	return fetchMessages(m.client, n.sessionID)
 }
 

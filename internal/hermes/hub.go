@@ -149,6 +149,42 @@ func (h *Hub) Card(ctx context.Context, sessionID string, since float64) (string
 	return out.Card, nil
 }
 
+// SearchHit is one full-text match from the hub.
+type SearchHit struct {
+	MessageID int     `json:"message_id"`
+	SessionID string  `json:"session_id"`
+	Role      string  `json:"role"`
+	Timestamp float64 `json:"timestamp"`
+	Snippet   string  `json:"snippet"`
+	Title     string  `json:"title"`
+}
+
+// Search runs a full-text query across all sessions.
+func (h *Hub) Search(ctx context.Context, query string, limit int) ([]SearchHit, error) {
+	u := fmt.Sprintf("%s/search?q=%s&limit=%d", h.BaseURL, url.QueryEscape(query), limit)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+h.Key)
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search: HTTP %d", resp.StatusCode)
+	}
+	var out struct {
+		OK      bool        `json:"ok"`
+		Results []SearchHit `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Results, nil
+}
+
 // Mirror relays one message into the session's Discord thread when the
 // session is Discord-bound. Returns (false, nil) when it has no binding.
 func (h *Hub) Mirror(ctx context.Context, sessionID, role, content string) (bool, error) {
