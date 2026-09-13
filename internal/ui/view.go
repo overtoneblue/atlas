@@ -167,7 +167,9 @@ func (m Model) liveTranscript(width int) []string {
 		lines = append(lines, renderMessage(msg, width)...)
 	}
 	if m.lastCard != "" && m.cardFor == m.openID {
-		lines = append(lines, styleMag.Render("  "+m.lastCard))
+		for _, l := range wrapIndent(m.lastCard, width, "  ", 4) {
+			lines = append(lines, styleMag.Render(l))
+		}
 	}
 	if m.streaming {
 		lines = append(lines, styleMauve.Render(" Nolan")+styleDim.Render(" · streaming"))
@@ -379,7 +381,7 @@ func (m Model) renderStatus(width int) string {
 	if m.streaming {
 		mode = "STREAM"
 	}
-	left := " " + mode + " · atlas 0.5.0 · " + m.status
+	left := " " + mode + " · atlas 0.5.1 · " + m.status
 	right := "? help"
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1
