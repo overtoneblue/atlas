@@ -31,12 +31,14 @@ func (m Model) RenderFrame(width, height int) string {
 		seps = 2
 	}
 	midW := width - leftW - railW - seps
-	contentH := height - 2 // composer + status bar
+	contentH := height - 1 // full-width status bar; composer lives in the middle column
+	transcriptH := contentH - 3
 
 	sep := strings.TrimSuffix(strings.Repeat(styleSep.Render("│")+"\n", contentH), "\n")
 
 	left := padBlock(strings.Join(m.renderTree(), "\n"), leftW, contentH)
-	mid := padBlock(strings.Join(m.renderTranscript(midW, contentH), "\n"), midW, contentH)
+	midTop := padBlock(strings.Join(m.renderTranscript(midW, transcriptH), "\n"), midW, transcriptH)
+	mid := midTop + "\n" + m.renderInputBox(midW)
 
 	blocks := []string{left, sep, mid}
 	if showRail {
@@ -45,7 +47,7 @@ func (m Model) RenderFrame(width, height int) string {
 	}
 	row := lipgloss.JoinHorizontal(lipgloss.Top, blocks...)
 
-	return row + "\n" + m.renderComposer(width) + "\n" + m.renderStatus(width)
+	return row + "\n" + m.renderStatus(width)
 }
 
 func (m Model) renderTree() []string {
@@ -284,25 +286,40 @@ func kv(k, v string) string {
 	return " " + styleDim.Render(fmt.Sprintf("%-7s", k)) + " " + v
 }
 
-func (m Model) renderComposer(width int) string {
-	var left, hints string
+// renderInputBox draws the composer as a bordered box at the bottom of the
+// conversation column — 3 rows (border + input + border), exactly `width` wide.
+func (m Model) renderInputBox(width int) string {
+	inner := width - 2 // lipgloss Width() includes padding; the border adds 2 more
+	if inner < 10 {
+		inner = 10
+	}
+	borderCol := colDim
+	var line string
 	switch {
 	case m.inserting:
-		left = styleInsert.Render(" INSERT ") + " " + m.input + styleYel.Render("▍")
-		hints = "enter send · esc back to normal"
+		borderCol = colGreen
+		text := m.input
+		budget := inner - 5 // "❯ " + cursor cell + margin
+		if budget < 4 {
+			budget = 4
+		}
+		r := []rune(text)
+		if len(r) > budget {
+			text = "…" + string(r[len(r)-(budget-1):])
+		}
+		line = styleGreen.Render("❯ ") + text + styleYel.Render("▍")
 	case m.streaming:
-		left = styleMauve.Render(" STREAM ") + " " + styleDim.Render("turn in flight")
-		hints = "esc detach · reply lands in the transcript"
+		borderCol = colMauve
+		line = styleMauve.Render("❯ ") + styleDim.Render("turn in flight — esc detaches")
 	default:
-		left = styleInsert.Render(" NORMAL ") + " " + styleDim.Render("press i to write a message")
-		hints = "j/k move · enter open · i write · ? help"
+		line = styleDim.Render("❯ press ") + styleYel.Render("i") + styleDim.Render(" to write a message")
 	}
-	lw, hw := ansi.StringWidth(left), ansi.StringWidth(hints)
-	gap := width - lw - hw
-	if gap < 2 {
-		return left
-	}
-	return left + strings.Repeat(" ", gap) + styleDim.Render(hints)
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderCol).
+		Padding(0, 1).
+		Width(inner).
+		Render(line)
 }
 
 func (m Model) renderStatus(width int) string {
@@ -313,7 +330,7 @@ func (m Model) renderStatus(width int) string {
 	if m.streaming {
 		mode = "STREAM"
 	}
-	left := " " + mode + " · atlas 0.3.0 · " + m.status
+	left := " " + mode + " · atlas 0.3.1 · " + m.status
 	right := "? help"
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1
