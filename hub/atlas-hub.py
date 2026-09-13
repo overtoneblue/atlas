@@ -483,6 +483,71 @@ def mirror_turn(session_id: str, since: float, dry: bool = False):
         time.sleep(0.5)
 
 
+def _turn_cards(session_id: str):
+    """Group metrics.jsonl api_call records into per-turn cards."""
+    path = os.path.join(os.path.dirname(env_path()), "stats", "metrics.jsonl")
+    turns = {}
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if session_id not in line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if r.get("session_id") != session_id or r.get("event") != "api_call":
+                    continue
+                tid = str(r.get("turn_id") or f"ts:{r.get('ts')}")
+                t = turns.get(tid)
+                if t is None:
+                    t = turns[tid] = {
+                        "calls": 0, "out": 0, "in": 0, "cache_read": 0, "dur": 0.0,
+                        "cost": 0.0, "last_eff": None, "last_gen": None, "last_ttfb": None,
+                        "end": 0.0, "model": None, "provider": None,
+                    }
+                t["calls"] += 1
+                t["out"] += int(r.get("out_tokens") or 0)
+                t["in"] += int(r.get("in_tokens") or 0)
+                t["cache_read"] += int(r.get("cache_read") or 0)
+                t["dur"] += float(r.get("duration_s") or 0)
+                if r.get("cost_usd") is not None:
+                    t["cost"] += float(r["cost_usd"])
+                t["last_eff"] = r.get("eff_tok_s")
+                t["last_gen"] = r.get("gen_tok_s")
+                t["last_ttfb"] = r.get("ttfb_s")
+                t["end"] = max(t["end"], float(r.get("ts") or 0))
+                t["model"] = r.get("model") or t["model"]
+                t["provider"] = r.get("provider") or t["provider"]
+    except OSError:
+        return {"ok": True, "turns": [], "total": {"turns": 0, "calls": 0, "cost_usd": None}}
+
+    cards = []
+    total = {"turns": 0, "calls": 0, "cost_usd": 0.0, "out_tokens": 0, "in_tokens": 0}
+    for tid, t in sorted(turns.items(), key=lambda kv: kv[1]["end"]):
+        cache_pct = round(100 * t["cache_read"] / t["in"]) if t["in"] else None
+        snap = {
+            "v": 1, "session_id": session_id, "turn_id": tid, "ts": t["end"],
+            "model": t["model"], "provider": t["provider"],
+            "calls": t["calls"], "out_tokens": t["out"], "in_tokens": t["in"],
+            "cache_hit_pct": cache_pct,
+            "turn_duration_s": round(t["dur"], 2),
+            "last_call_eff_tok_s": t["last_eff"],
+            "last_call_ttfb_s": t["last_ttfb"],
+            "last_call_gen_tok_s": t["last_gen"],
+            "cost_usd": round(t["cost"], 6) if t["cost"] else None,
+            "avg_in_per_call": round(t["in"] / t["calls"], 1) if t["calls"] else None,
+        }
+        cards.append({"end_ts": t["end"], "line": _render_card(snap), "snap": snap})
+        total["turns"] += 1
+        total["calls"] += t["calls"]
+        total["cost_usd"] = (total["cost_usd"] or 0) + t["cost"]
+        total["out_tokens"] += t["out"]
+        total["in_tokens"] += t["in"]
+    total["cost_usd"] = round(total["cost_usd"], 6) if total["cost_usd"] else None
+    return {"ok": True, "turns": cards, "total": total}
+
+
 def _fts_query(q: str) -> str:
     import re
 
@@ -568,6 +633,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/health":
             self._json(200, {"ok": True, "service": "atlas-hub"})
+            return
+        if self.path.split("?")[0] == "/stats/turns":
+            if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
+                self._json(401, {"error": "unauthorized"})
+                return
+            try:
+                from urllib.parse import parse_qs, urlparse
+
+                q = parse_qs(urlparse(self.path).query)
+                sid = (q.get("session_id") or [""])[0]
+                self._json(200, _turn_cards(sid))
+            except Exception as e:
+                self._json(500, {"error": str(e)})
             return
         if self.path.split("?")[0] == "/search":
             if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":

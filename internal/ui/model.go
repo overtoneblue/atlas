@@ -70,6 +70,14 @@ type Model struct {
 	searchHits  []hermes.SearchHit
 	searchSel   int
 	searching   bool
+
+	// per-turn stats cards
+	showCards  bool
+	turnCards  []hermes.TurnCard
+	cardLines  map[int]string
+	cardsFor   string
+	sessTotal  hermes.SessionTotal
+	totalFor   string
 }
 
 // New returns the initial model.
@@ -109,6 +117,9 @@ func (m Model) Init() tea.Cmd {
 	}
 	if m.hub.Configured() {
 		cmds = append(cmds, fetchHubTree(m.hub))
+		if m.openID != "" {
+			cmds = append(cmds, fetchTurnCards(m.hub, m.openID))
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -203,6 +214,42 @@ func searchCmd(h *hermes.Hub, q string) tea.Cmd {
 	}
 }
 
+type turnCardsMsg struct {
+	sessionID string
+	cards     []hermes.TurnCard
+	total     hermes.SessionTotal
+	err       error
+}
+
+func fetchTurnCards(h *hermes.Hub, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		cards, total, err := h.TurnCards(context.Background(), sessionID)
+		return turnCardsMsg{sessionID: sessionID, cards: cards, total: total, err: err}
+	}
+}
+
+// assignCards maps each turn card to the turn's final assistant message.
+func assignCards(msgs []hermes.Message, cards []hermes.TurnCard) map[int]string {
+	out := map[int]string{}
+	if len(msgs) == 0 || len(cards) == 0 {
+		return out
+	}
+	ai := 0
+	for _, c := range cards {
+		best := -1
+		for ai < len(msgs) && msgs[ai].Timestamp <= c.EndTS+1.0 {
+			if msgs[ai].Role == "assistant" {
+				best = ai
+			}
+			ai++
+		}
+		if best >= 0 {
+			out[msgs[best].ID] = c.Line
+		}
+	}
+	return out
+}
+
 func waitStream(ch chan hermes.ChatEvent) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
@@ -264,11 +311,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.openID == msg.sessionID {
 			m.messages = msg.messages
+			if m.cardsFor == m.openID {
+				m.cardLines = assignCards(m.messages, m.turnCards)
+			}
 			if m.jumpMsgID != 0 {
 				m.scroll = m.jumpScrollFor(m.jumpMsgID)
 				m.jumpMsgID = 0
 			}
 		}
+	case turnCardsMsg:
+		if msg.err != nil || msg.sessionID != m.openID {
+			return m, nil
+		}
+		m.cardsFor = msg.sessionID
+		m.turnCards = msg.cards
+		m.cardLines = assignCards(m.messages, msg.cards)
+		m.sessTotal = msg.total
+		m.totalFor = msg.sessionID
+		if m.lastCard == "" && len(msg.cards) > 0 {
+			m.lastCard = msg.cards[len(msg.cards)-1].Line
+			m.cardFor = msg.sessionID
+		}
+		return m, nil
 	case streamEventMsg:
 		switch msg.ev.Event {
 		case "assistant.delta":
@@ -313,6 +377,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.hub.Configured() && m.openID != "" {
 			cmds = append(cmds, fetchCard(m.hub, m.openID, m.turnStart))
+			cmds = append(cmds, fetchTurnCards(m.hub, m.openID))
 			cmds = append(cmds, mirrorTurnCmd(m.hub, m.openID, m.turnStart))
 		}
 		if len(cmds) > 0 {
@@ -363,6 +428,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "search — type a query, enter runs it"
 		case "e":
 			m.expandAll = !m.expandAll
+		case "c":
+			m.showCards = !m.showCards
+			if m.showCards {
+				m.status = "cards: every turn"
+			} else {
+				m.status = "cards: latest only"
+			}
 		case "esc":
 			if m.streaming {
 				m.interrupt()
@@ -640,7 +712,17 @@ func (m *Model) open(n treeNode) tea.Cmd {
 	m.openLast = n.lastActive
 	m.messages = nil
 	m.scroll = 0
-	return fetchMessages(m.client, n.sessionID)
+	m.lastCard = ""
+	m.cardFor = ""
+	m.cardLines = nil
+	m.cardsFor = ""
+	m.sessTotal = hermes.SessionTotal{}
+	m.totalFor = ""
+	cmds := []tea.Cmd{fetchMessages(m.client, n.sessionID)}
+	if m.hub.Configured() {
+		cmds = append(cmds, fetchTurnCards(m.hub, n.sessionID))
+	}
+	return tea.Batch(cmds...)
 }
 
 // openSelection maps the tree cursor to a session when it's on a post row.

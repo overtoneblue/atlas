@@ -171,8 +171,15 @@ func (m Model) transcriptLines(width int) ([]string, map[int]int) {
 	for _, msg := range msgs {
 		idx[msg.ID] = len(lines)
 		lines = append(lines, renderMessage(msg, width, m.expandAll)...)
+		if m.showCards && msg.Role == "assistant" {
+			if line, ok := m.cardLines[msg.ID]; ok {
+				for _, l := range wrapIndent(line, width, "  ", 3) {
+					lines = append(lines, styleMag.Render(l))
+				}
+			}
+		}
 	}
-	if m.lastCard != "" && m.cardFor == m.openID {
+	if m.lastCard != "" && m.cardFor == m.openID && !m.showCards {
 		for _, l := range wrapIndent(m.lastCard, width, "  ", 4) {
 			lines = append(lines, styleMag.Render(l))
 		}
@@ -216,6 +223,7 @@ func helpLines(width int) []string {
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " open the selected post",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "/")) + " search all sessions (enter → jump)",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "e")) + " expand long messages",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "c")) + " per-turn stat cards (all ⇄ latest)",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "i")) + " insert mode — write a message",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " send it (while in insert mode)",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "esc")) + " leave insert · detach · back to bottom",
@@ -401,7 +409,11 @@ func (m Model) renderRail() []string {
 			kv("msgs", fmt.Sprintf("%d", m.msgCount())),
 			kv("active", relTime(m.openLast)),
 			kv("session", truncLine(m.openID, 13)),
-			"",
+		)
+		if m.totalFor == m.openID && m.sessTotal.Turns > 0 {
+			lines = append(lines, kv("spend", fmt.Sprintf("$%.4f · %dt", m.sessTotal.Cost, m.sessTotal.Turns)))
+		}
+		lines = append(lines,
 			styleDim.Render(" ───────────"),
 			styleTitle.Render(" TREE"),
 			styleGreen.Render(" ● ")+styleDim.Render(fmt.Sprintf("%d posts", countPosts(m.tree))),
@@ -488,7 +500,7 @@ func (m Model) renderStatus(width int) string {
 	if m.searchMode {
 		foc = "search"
 	}
-	left := " " + mode + " · " + foc + " · atlas 0.6.0 · " + m.status
+	left := " " + mode + " · " + foc + " · atlas 0.7.0 · " + m.status
 	right := "? help"
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1

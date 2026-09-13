@@ -159,6 +159,48 @@ type SearchHit struct {
 	Title     string  `json:"title"`
 }
 
+// TurnCard is one historical turn's stats card.
+type TurnCard struct {
+	EndTS float64 `json:"end_ts"`
+	Line  string  `json:"line"`
+}
+
+// SessionTotal summarizes a session's recorded spend.
+type SessionTotal struct {
+	Turns int     `json:"turns"`
+	Calls int     `json:"calls"`
+	Cost  float64 `json:"cost_usd"`
+	Out   int     `json:"out_tokens"`
+	In    int     `json:"in_tokens"`
+}
+
+// TurnCards fetches every recorded turn's card for a session.
+func (h *Hub) TurnCards(ctx context.Context, sessionID string) ([]TurnCard, SessionTotal, error) {
+	u := fmt.Sprintf("%s/stats/turns?session_id=%s", h.BaseURL, url.QueryEscape(sessionID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, SessionTotal{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+h.Key)
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return nil, SessionTotal{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, SessionTotal{}, fmt.Errorf("stats/turns: HTTP %d", resp.StatusCode)
+	}
+	var out struct {
+		OK    bool         `json:"ok"`
+		Turns []TurnCard   `json:"turns"`
+		Total SessionTotal `json:"total"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, SessionTotal{}, err
+	}
+	return out.Turns, out.Total, nil
+}
+
 // Search runs a full-text query across all sessions.
 func (h *Hub) Search(ctx context.Context, query string, limit int) ([]SearchHit, error) {
 	u := fmt.Sprintf("%s/search?q=%s&limit=%d", h.BaseURL, url.QueryEscape(query), limit)
