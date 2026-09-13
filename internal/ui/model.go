@@ -72,12 +72,12 @@ type Model struct {
 	searching   bool
 
 	// per-turn stats cards
-	showCards  bool
-	turnCards  []hermes.TurnCard
-	cardLines  map[int]string
-	cardsFor   string
-	sessTotal  hermes.SessionTotal
-	totalFor   string
+	showCards bool
+	turnCards []hermes.TurnCard
+	cardLines map[int]string
+	cardsFor  string
+	sessTotal hermes.SessionTotal
+	totalFor  string
 
 	// live refresh / unread / stop
 	read      map[string]float64

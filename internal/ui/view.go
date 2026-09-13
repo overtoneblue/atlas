@@ -699,7 +699,7 @@ func wrapIndent(text string, width int, indent string, maxLines int) []string {
 	}
 	if truncated && len(out) > 0 {
 		last := out[len(out)-1]
-		out[len(out)-1] = ansi.Truncate(last, width-3, "")+" …"
+		out[len(out)-1] = ansi.Truncate(last, width-3, "") + " …"
 	}
 	if len(out) > maxLines {
 		out = out[:maxLines]
