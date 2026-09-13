@@ -216,6 +216,76 @@ def build_tree():
     return {"generated_at": time.time(), "sections": sections, "errors": errors}
 
 
+# ---- mirror: relay atlas-originated messages into discord threads ----
+
+def _post_discord_message(channel_id: str, content: str):
+    payload = json.dumps({"content": content}).encode()
+    req = urllib.request.Request(
+        f"{DISCORD_API}/channels/{channel_id}/messages",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bot {TOKEN}",
+            "Content-Type": "application/json",
+            "User-Agent": "atlas-hub/0.1",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.load(r)
+
+
+def _chunks(text: str, limit: int = 1900):
+    out, cur = [], ""
+    for line in text.split("\n"):
+        if len(line) > limit:
+            if cur:
+                out.append(cur)
+                cur = ""
+            for i in range(0, len(line), limit):
+                out.append(line[i:i + limit])
+            continue
+        if cur and len(cur) + len(line) + 1 > limit:
+            out.append(cur)
+            cur = ""
+        cur = cur + ("\n" if cur else "") + line
+    if cur:
+        out.append(cur)
+    return out or [""]
+
+
+def mirror_message(session_id: str, role: str, content: str):
+    """Post one message into the session's Discord thread (if it has one).
+
+    The posts are made by the Nolan bot; the gateway hard-drops its own
+    messages on ingest, so mirroring can never re-trigger a turn.
+    """
+    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        row = con.execute(
+            "SELECT source, thread_id, chat_id FROM sessions WHERE id=?", (session_id,)
+        ).fetchone()
+    finally:
+        con.close()
+    if row is None:
+        return {"ok": False, "error": "unknown session"}
+    if row["source"] != "discord" or not row["thread_id"]:
+        return {"ok": False, "error": "no discord thread for session"}
+    target = row["thread_id"]
+    if role == "user":
+        quoted = "\n".join("> " + ln for ln in (content or "").split("\n"))
+        text = f"-# ⌨️ atlas — Overtoneblue\n{quoted}"
+    else:
+        text = content or ""
+    ids = []
+    for chunk in _chunks(text):
+        if not chunk.strip():
+            continue
+        resp = _post_discord_message(target, chunk)
+        ids.append(resp.get("id"))
+    return {"ok": True, "chunks": len(ids), "message_ids": ids}
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
@@ -227,6 +297,26 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 self._json(200, build_tree())
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
+        self._json(404, {"error": "not found"})
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        if path == "/mirror":
+            if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
+                self._json(401, {"error": "unauthorized"})
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                res = mirror_message(
+                    str(body.get("session_id") or ""),
+                    str(body.get("role") or ""),
+                    str(body.get("content") or ""),
+                )
+                self._json(200, res)
             except Exception as e:
                 self._json(500, {"error": str(e)})
             return

@@ -8,9 +8,17 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.3.0 — composer + streaming turns.** Tree from the hub, transcripts
-from the API server, and you can now write messages: `i` to insert, `enter`
-to send — the turn streams back live (deltas, tool progress).
+Status: **0.4.0 — mirror.** Sends from Atlas into a Discord-bound session are
+relayed into the real Discord thread (both your message and the reply) via
+`atlas-hub` — the phone stays in the loop while the desktop does the work.
+
+## Mirror
+
+`POST /mirror {session_id, role, content}` on atlas-hub posts one message into
+the session's Discord thread: your message as a small-text "atlas" quote, the
+agent's reply verbatim (chunked at 1900 chars). Posts are made by the bot,
+which the gateway hard-drops on ingest — mirroring can never re-trigger a
+turn.
 
 ## Hub
 

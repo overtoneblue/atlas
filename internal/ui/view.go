@@ -330,7 +330,7 @@ func (m Model) renderStatus(width int) string {
 	if m.streaming {
 		mode = "STREAM"
 	}
-	left := " " + mode + " · atlas 0.3.1 · " + m.status
+	left := " " + mode + " · atlas 0.4.0 · " + m.status
 	right := "? help"
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1

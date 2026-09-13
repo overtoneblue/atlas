@@ -48,13 +48,14 @@ type Model struct {
 	openLast  float64
 
 	// composer / streaming
-	inserting    bool
-	input        string
-	streaming    bool
-	streamBuf    string
-	streamCh     chan hermes.ChatEvent
-	streamCancel context.CancelFunc
-	helpVisible  bool
+	inserting     bool
+	input         string
+	streaming     bool
+	streamBuf     string
+	streamCh      chan hermes.ChatEvent
+	streamCancel  context.CancelFunc
+	helpVisible   bool
+	replyMirrored bool
 }
 
 // New returns the initial model.
@@ -138,6 +139,19 @@ func fetchMessages(c *hermes.Client, id string) tea.Cmd {
 	}
 }
 
+type mirrorMsg struct {
+	role string
+	ok   bool
+	err  error
+}
+
+func mirrorMessage(h *hermes.Hub, sessionID, role, content string) tea.Cmd {
+	return func() tea.Msg {
+		ok, err := h.Mirror(context.Background(), sessionID, role, content)
+		return mirrorMsg{role: role, ok: ok, err: err}
+	}
+}
+
 func waitStream(ch chan hermes.ChatEvent) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
@@ -208,6 +222,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.ev.Content != "" {
 				m.streamBuf = msg.ev.Content
 			}
+			if m.hub.Configured() && !m.replyMirrored && msg.ev.Content != "" && m.openID != "" {
+				m.replyMirrored = true
+				return m, tea.Batch(waitStream(m.streamCh), mirrorMessage(m.hub, m.openID, "assistant", msg.ev.Content))
+			}
 		case "tool.started":
 			if msg.ev.ToolName != "" {
 				m.status = "tool · " + msg.ev.ToolName
@@ -216,6 +234,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "stream error"
 		}
 		return m, waitStream(m.streamCh)
+	case mirrorMsg:
+		if msg.err != nil {
+			m.status = "mirror failed: " + msg.err.Error()
+		}
+		return m, nil
 	case streamClosedMsg:
 		m.streaming = false
 		m.streamBuf = ""
@@ -342,6 +365,7 @@ func (m *Model) beginTurn(text string) tea.Cmd {
 		Timestamp: float64(time.Now().Unix()),
 	})
 	m.status = "streaming…"
+	m.replyMirrored = false
 	ctx, cancel := context.WithCancel(context.Background())
 	m.streamCancel = cancel
 	ch := make(chan hermes.ChatEvent, 256)
@@ -363,7 +387,11 @@ func (m *Model) beginTurn(text string) tea.Cmd {
 			}
 		}
 	}()
-	return waitStream(ch)
+	cmds := []tea.Cmd{waitStream(ch)}
+	if m.hub.Configured() {
+		cmds = append(cmds, mirrorMessage(m.hub, id, "user", text))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) interrupt() {

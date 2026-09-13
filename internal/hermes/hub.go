@@ -1,9 +1,11 @@
 package hermes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -76,4 +78,46 @@ func (h *Hub) FetchTree(ctx context.Context) (*HubTree, error) {
 		return nil, err
 	}
 	return &t, nil
+}
+
+// Mirror relays one message into the session's Discord thread when the
+// session is Discord-bound. Returns (false, nil) when it has no binding.
+func (h *Hub) Mirror(ctx context.Context, sessionID, role, content string) (bool, error) {
+	body, err := json.Marshal(map[string]string{
+		"session_id": sessionID,
+		"role":       role,
+		"content":    content,
+	})
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.BaseURL+"/mirror", bytes.NewReader(body))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.Key)
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return false, fmt.Errorf("mirror: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, err
+	}
+	if !out.OK {
+		if out.Error == "no discord thread for session" || out.Error == "unknown session" {
+			return false, nil
+		}
+		return false, fmt.Errorf("mirror: %s", out.Error)
+	}
+	return true, nil
 }
