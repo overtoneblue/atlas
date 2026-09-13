@@ -514,7 +514,7 @@ func (m Model) renderStatus(width int) string {
 	if m.searchMode {
 		foc = "search"
 	}
-	left := " " + mode + " · " + foc + " · atlas 0.8.0 · " + m.status
+	left := " " + mode + " · " + foc + " · atlas 0.8.1 · " + m.status
 	right := "? help"
 	if m.streaming {
 		right = "x stop · ? help"

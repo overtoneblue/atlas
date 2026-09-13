@@ -18,7 +18,7 @@
       packages = forAllSystems (system: {
         default = nixpkgs.legacyPackages.${system}.buildGoModule {
           pname = "atlas";
-          version = "0.8.0";
+          version = "0.8.1";
           src = ./.;
 
           vendorHash = "sha256-uwBJAqN4sIepiiJf9lCDumLqfKJEowQO2tOiSWD3Fig=";
@@ -31,6 +31,12 @@
         default = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/atlas";
+        };
+      });
+
+      devShells = forAllSystems (system: {
+        default = nixpkgs.legacyPackages.${system}.mkShell {
+          packages = [ nixpkgs.legacyPackages.${system}.go nixpkgs.legacyPackages.${system}.gnumake ];
         };
       });
     };
