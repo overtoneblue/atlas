@@ -112,6 +112,8 @@ func (m Model) modeLabel() string {
 func (m Model) renderTranscript(width, height int) []string {
 	var lines []string
 	switch {
+	case m.helpVisible:
+		lines = helpLines(width)
 	case m.openID != "":
 		lines = m.liveTranscript(width)
 	case len(m.sessions) > 0 || (m.client.Configured() && m.hub.Configured()):
@@ -146,11 +148,11 @@ func (m Model) liveTranscript(width int) []string {
 	rule := strings.Repeat("─", max(8, width-2))
 	lines := []string{
 		styleTitle.Render(truncLine(m.openTitle, max(10, width-24))) + "  " + styleDim.Render(src),
-		styleDim.Render(fmt.Sprintf("session %s · %d msgs · %s", m.openID, m.openMsgs, relTime(m.openLast))),
+		styleDim.Render(fmt.Sprintf("session %s · %d msgs · %s", m.openID, m.msgCount(), relTime(m.openLast))),
 		styleDim.Render(" " + rule),
 		"",
 	}
-	if len(m.messages) == 0 {
+	if len(m.messages) == 0 && !m.streaming {
 		lines = append(lines, styleFaint.Render("  loading transcript…"))
 		return lines
 	}
@@ -160,6 +162,15 @@ func (m Model) liveTranscript(width int) []string {
 	}
 	for _, msg := range msgs {
 		lines = append(lines, renderMessage(msg, width)...)
+	}
+	if m.streaming {
+		lines = append(lines, styleMauve.Render(" Nolan")+styleDim.Render(" · streaming"))
+		buf := cleanText(m.streamBuf)
+		if buf == "" {
+			buf = "…"
+		}
+		lines = append(lines, wrapIndent(buf+"▍", width, "   ", 40)...)
+		lines = append(lines, "")
 	}
 	return lines
 }
@@ -175,6 +186,28 @@ func hintTranscript(width int) []string {
 		"",
 		styleDim.Render("  categories, channels and posts"),
 		styleDim.Render("  mirror the discord workspace."),
+	}
+}
+
+func helpLines(width int) []string {
+	rule := strings.Repeat("─", max(8, min(width-2, 46)))
+	return []string{
+		styleTitle.Render(" ATLAS — KEYMAP") + styleDim.Render("   esc closes"),
+		styleDim.Render(" " + rule),
+		"",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "j / k")) + " move through the tree",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "g / G")) + " first / last row",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " open the selected post",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "i")) + " insert mode — write a message",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " send it (while in insert mode)",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "esc")) + " leave insert · detach a stream",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "R")) + " refresh tree + sessions",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "tab")) + " cycle focus panes",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "?")) + " this panel",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "q")) + " quit",
+		"",
+		styleDim.Render("  sending runs a real agent turn in the"),
+		styleDim.Render("  open session and streams the reply back here."),
 	}
 }
 
@@ -215,7 +248,7 @@ func (m Model) renderRail() []string {
 		}
 		lines = append(lines,
 			kv("source", src),
-			kv("msgs", fmt.Sprintf("%d", m.openMsgs)),
+			kv("msgs", fmt.Sprintf("%d", m.msgCount())),
 			kv("active", relTime(m.openLast)),
 			kv("session", truncLine(m.openID, 13)),
 			"",
@@ -252,8 +285,18 @@ func kv(k, v string) string {
 }
 
 func (m Model) renderComposer(width int) string {
-	left := styleInsert.Render(" INSERT ") + " " + styleDim.Render("message…")
-	hints := "enter send · esc normal · ^k jump · / search · ? help"
+	var left, hints string
+	switch {
+	case m.inserting:
+		left = styleInsert.Render(" INSERT ") + " " + m.input + styleYel.Render("▍")
+		hints = "enter send · esc back to normal"
+	case m.streaming:
+		left = styleMauve.Render(" STREAM ") + " " + styleDim.Render("turn in flight")
+		hints = "esc detach · reply lands in the transcript"
+	default:
+		left = styleInsert.Render(" NORMAL ") + " " + styleDim.Render("press i to write a message")
+		hints = "j/k move · enter open · i write · ? help"
+	}
 	lw, hw := ansi.StringWidth(left), ansi.StringWidth(hints)
 	gap := width - lw - hw
 	if gap < 2 {
@@ -263,7 +306,14 @@ func (m Model) renderComposer(width int) string {
 }
 
 func (m Model) renderStatus(width int) string {
-	left := " NORMAL · atlas 0.2.0 · " + m.status
+	mode := "NORMAL"
+	if m.inserting {
+		mode = "INSERT"
+	}
+	if m.streaming {
+		mode = "STREAM"
+	}
+	left := " " + mode + " · atlas 0.3.0 · " + m.status
 	right := "? help"
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1

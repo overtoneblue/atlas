@@ -8,9 +8,9 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.2.0 — Discord-shaped tree.** The left pane mirrors the real
-Discord structure (server → category → channel → forum post) assembled by
-`hub/atlas-hub.py`; the center pane shows live session transcripts.
+Status: **0.3.0 — composer + streaming turns.** Tree from the hub, transcripts
+from the API server, and you can now write messages: `i` to insert, `enter`
+to send — the turn streams back live (deltas, tool progress).
 
 ## Hub
 
@@ -58,16 +58,23 @@ Without a key it falls back to demo data.
 | `g` / `G` | jump to top / bottom |
 | `tab` / `shift+tab` | cycle pane focus |
 | `enter` | open the selected post |
-| `?` | key help in the status bar |
+| `i` | insert mode — write a message |
+| `enter` (insert) | send it — runs a turn, streams the reply |
+| `esc` | leave insert · detach a running stream |
+| `R` | refresh tree + sessions |
+| `?` | full keymap panel |
 | `q` / `ctrl+c` | quit |
+
+`atlas --open <session-id>` pins the app to one conversation at startup
+(handy for testing).
 
 ## Layout
 
 - **Left** — workstream tree: categories → channels → posts, unread badges.
-- **Center** — transcript of the open conversation: streaming text, tool
-  cards, inline approvals. (Demo content until the Hermes wiring lands.)
-- **Right** — details, active runs, context meter.
-- **Bottom** — composer + status bar.
+- **Center** — transcript of the open conversation with the live streaming
+  reply while a turn runs.
+- **Right** — details, tree stats, mode.
+- **Bottom** — composer (NORMAL / INSERT / STREAM) + status bar.
 
 ## Development
 
