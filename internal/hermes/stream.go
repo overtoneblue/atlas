@@ -56,8 +56,20 @@ func (c *Client) ChatStream(ctx context.Context, sessionID, input string, onEven
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("chat/stream: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
+	return scanSSE(resp.Body, func(name, data string) {
+		var ev ChatEvent
+		if err := json.Unmarshal([]byte(data), &ev); err == nil {
+			ev.Event = name
+			onEvent(ev)
+		}
+	})
+}
 
-	sc := bufio.NewScanner(resp.Body)
+// scanSSE reads an SSE stream and delivers (event name, data payload) pairs.
+// The Hermes gateway emits single-line "data:" fields carrying JSON; other
+// framing (comments, multi-line data) is not produced and is ignored.
+func scanSSE(r io.Reader, deliver func(name, data string)) error {
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	evName := ""
 	for sc.Scan() {
@@ -66,11 +78,7 @@ func (c *Client) ChatStream(ctx context.Context, sessionID, input string, onEven
 		case strings.HasPrefix(line, "event: "):
 			evName = strings.TrimSpace(strings.TrimPrefix(line, "event: "))
 		case strings.HasPrefix(line, "data: "):
-			var ev ChatEvent
-			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev); err == nil {
-				ev.Event = evName
-				onEvent(ev)
-			}
+			deliver(evName, strings.TrimPrefix(line, "data: "))
 		case line == "":
 			evName = ""
 		}

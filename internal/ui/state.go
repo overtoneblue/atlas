@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
+
+	"atlas/internal/config"
 )
 
 // readState persists client-side read marks: session id -> unix seconds of the
@@ -13,16 +16,8 @@ type readState struct {
 	Read map[string]float64 `json:"read"`
 }
 
-func statePath() string {
-	base, err := os.UserConfigDir()
-	if err != nil || base == "" {
-		return ""
-	}
-	return filepath.Join(base, "atlas", "state.json")
-}
-
 func loadReadState() map[string]float64 {
-	p := statePath()
+	p := config.StateFile()
 	if p == "" {
 		return map[string]float64{}
 	}
@@ -40,7 +35,7 @@ func loadReadState() map[string]float64 {
 // saveReadState writes atomically (tmp + rename); failures are non-fatal —
 // unread marks are a convenience, never a correctness surface.
 func saveReadState(read map[string]float64) {
-	p := statePath()
+	p := config.StateFile()
 	if p == "" {
 		return
 	}
@@ -56,4 +51,50 @@ func saveReadState(read map[string]float64) {
 		return
 	}
 	_ = os.Rename(tmp, p)
+}
+
+// ---- unread / read-state ----
+
+// markRead records that a session was just seen; persisted lazily.
+func (m *Model) markRead(id string) {
+	if id == "" {
+		return
+	}
+	if m.read == nil {
+		m.read = map[string]float64{}
+	}
+	m.read[id] = float64(time.Now().Unix())
+	m.readDirty = true
+	m.maybeSaveRead()
+}
+
+// maybeSaveRead persists read state at most once per 30s while dirty.
+func (m *Model) maybeSaveRead() {
+	if !m.readDirty || time.Since(m.lastSave) < 30*time.Second {
+		return
+	}
+	saveReadState(m.read)
+	m.readDirty = false
+	m.lastSave = time.Now()
+}
+
+// unread reports whether the node's session has activity newer than its read
+// mark. A session never opened in Atlas reads as unread (dot until first open).
+func (m Model) unread(n treeNode) bool {
+	if n.sessionID == "" || n.lastActive == 0 {
+		return false
+	}
+	seen, ok := m.read[n.sessionID]
+	return !ok || n.lastActive > seen+1
+}
+
+// unreadCount counts unread posts in the current tree.
+func (m Model) unreadCount() int {
+	c := 0
+	for _, n := range m.tree {
+		if n.kind == kindPost && m.unread(n) {
+			c++
+		}
+	}
+	return c
 }

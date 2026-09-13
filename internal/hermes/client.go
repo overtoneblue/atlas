@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"atlas/internal/config"
 )
 
 type Client struct {
@@ -45,7 +47,7 @@ func NewFromEnv() *Client {
 func resolveKey() string {
 	key := strings.TrimSpace(os.Getenv("ATLAS_API_KEY"))
 	if key == "" {
-		key = readKeyFromEnvFile(configEnvPath())
+		key = readKeyFromEnvFile(config.EnvFile())
 	}
 	if key == "" {
 		key = readKeyFromEnvFile(hermesEnvPath())
@@ -173,15 +175,6 @@ func (c *Client) get(ctx context.Context, u string, dst any) error {
 		return fmt.Errorf("GET %s: HTTP %d", u, resp.StatusCode)
 	}
 	return json.NewDecoder(resp.Body).Decode(dst)
-}
-
-// configEnvPath is the per-user Atlas env file: ~/.config/atlas/env.
-func configEnvPath() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(dir, "atlas", "env")
 }
 
 // hermesEnvPath is the active hermes home's .env (dev convenience).
