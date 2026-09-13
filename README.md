@@ -8,10 +8,12 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.6.0 — transcript livable.** Scrollback with focus (`tab` → `j/k`, `pgup/dn`,
-`g/G`), `e` to expand long messages, and `/` full-text search across every
-session with jump-to-result. Plus the 0.5.0 native-parity mirror (reasoning,
-tool lines, stats card relayed both ways).
+Status: **0.7.1 — per-turn stats cards + approval notes.** The latest turn's
+stats card persists on open and `c` flips to per-turn cards under every reply
+(session spend in the rail, from the same `metrics.jsonl` the Discord card
+plugin uses). Tool results decided by the approval layer render distinctly:
+amber `⚠` for flagged/decided commands, red `⛔` for blocked/denied ones.
+Plus 0.6.0 scrollback/search, 0.5.0 native-parity mirror.
 
 ## Mirror
 

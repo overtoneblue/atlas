@@ -263,8 +263,7 @@ func renderMessage(msg hermes.Message, width int, expand bool) []string {
 		}
 		out = append(out, "")
 	case "tool":
-		first := firstLine(cleanText(string(msg.Content)))
-		out = append(out, styleDim.Render("   ↳ "+truncLine(first, max(8, width-8))))
+		out = append(out, renderToolResult(string(msg.Content), width)...)
 	default:
 	}
 	return out
@@ -500,7 +499,7 @@ func (m Model) renderStatus(width int) string {
 	if m.searchMode {
 		foc = "search"
 	}
-	left := " " + mode + " · " + foc + " · atlas 0.7.0 · " + m.status
+	left := " " + mode + " · " + foc + " · atlas 0.7.1 · " + m.status
 	right := "? help"
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1
@@ -579,6 +578,55 @@ func truncLine(s string, w int) string {
 		return "…"
 	}
 	return string(r[:w-1]) + "…"
+}
+
+// renderToolResult renders one tool-result payload. Terminal/write tools return
+// JSON; results handled by the approval layer carry an "approval" note, which we
+// surface distinctly (amber = decided, red = blocked/denied) instead of hiding
+// it in the dim first-line fallback.
+func renderToolResult(raw string, width int) []string {
+	if note, kind := approvalNote(raw); note != "" {
+		style, mark := styleYel, "⚠ "
+		if kind == "block" {
+			style, mark = styleRed, "⛔ "
+		}
+		lines := wrapIndent(mark+note, width, "   ", 4)
+		out := make([]string, 0, len(lines))
+		for _, l := range lines {
+			out = append(out, style.Render(l))
+		}
+		return out
+	}
+	first := firstLine(cleanText(raw))
+	return []string{styleDim.Render("   ↳ " + truncLine(first, max(8, width-8)))}
+}
+
+// approvalNote extracts the approval layer's decision from a tool-result JSON
+// payload ("Command was flagged (…) and auto-approved by smart approval"). The
+// second return is "block" for denied/blocked outcomes, else "decided".
+func approvalNote(raw string) (string, string) {
+	s := strings.TrimSpace(raw)
+	if !strings.HasPrefix(s, "{") {
+		return "", ""
+	}
+	var payload struct {
+		Approval string `json:"approval"`
+	}
+	if json.Unmarshal([]byte(s), &payload) != nil || payload.Approval == "" {
+		return "", ""
+	}
+	note := strings.TrimPrefix(payload.Approval, "Command was ")
+	note = strings.Replace(note, " and auto-approved by smart approval.", " — auto-approved (smart approval).", 1)
+	note = strings.Replace(note, " and denied by smart approval.", " — denied (smart approval).", 1)
+	lower := strings.ToLower(note)
+	kind := "decided"
+	for _, marker := range []string{"denied", "blocked", "timed out", "approval required", "pending"} {
+		if strings.Contains(lower, marker) {
+			kind = "block"
+			break
+		}
+	}
+	return note, kind
 }
 
 // wrapIndent word-wraps text (keeping embedded newlines as paragraph breaks)
