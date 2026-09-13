@@ -8,17 +8,20 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.4.0 — mirror.** Sends from Atlas into a Discord-bound session are
-relayed into the real Discord thread (both your message and the reply) via
-`atlas-hub` — the phone stays in the loop while the desktop does the work.
+Status: **0.5.0 — native-parity mirror.** A turn sent from Atlas relays into
+the thread exactly like a native one: reasoning in Discord's `-# 💭` subtext,
+tool lines with emojis (`💻 terminal`, `🔧 patch([...])`), the reply, and the
+`⚡ tok/s` stats card from the hermes-stats recorder — and Atlas renders the
+same reasoning, tool previews and card in its own transcript.
 
 ## Mirror
 
-`POST /mirror {session_id, role, content}` on atlas-hub posts one message into
-the session's Discord thread: your message as a small-text "atlas" quote, the
-agent's reply verbatim (chunked at 1900 chars). Posts are made by the bot,
-which the gateway hard-drops on ingest — mirroring can never re-trigger a
-turn.
+`POST /mirror {session_id, role, content}` relays a single message (your side,
+sent immediately on send). `POST /mirror_turn {session_id, since}` reconstructs
+the finished turn from the session's messages — reasoning + reply, tool lines,
+stats card, native `(i/n)` chunking. Posts are made by the bot, which the
+gateway hard-drops on ingest — mirroring can never re-trigger a turn.
+`GET /stats/card?session_id=…&since=…` exposes the rendered card for the TUI.
 
 ## Hub
 

@@ -286,8 +286,232 @@ def mirror_message(session_id: str, role: str, content: str):
     return {"ok": True, "chunks": len(ids), "message_ids": ids}
 
 
+# ---- native-parity turn mirror: reasoning, tool lines, reply, stats card ----
+
+_TOOL_EMOJIS = {
+    "terminal": "💻", "close_terminal": "🖥️", "read_terminal": "🖥️",
+    "patch": "🔧", "read_file": "📖", "write_file": "✍️", "search_files": "🔎",
+    "discord": "⚙️", "discord_admin": "⚙️", "process_manage": "⚙️",
+    "delegate_task": "🔀", "memory": "🧠", "web_search": "🌐", "web_extract": "🌐",
+    "browser_navigate": "🌐", "vision_analyze": "🖼️", "todo_list": "📋",
+    "cronjob_manage": "⏰", "skill_manage": "📖", "skill_view": "📖",
+    "skills_list": "📖", "clarify": "❓", "code_execution": "🐍",
+}
+
+
+def _tool_call_line(name: str, arguments: str) -> str:
+    """Approximate the gateway's Discord tool line for one tool call."""
+    emoji = _TOOL_EMOJIS.get(name, "⚙️")
+    head = f"{emoji} {name}"
+    try:
+        args = json.loads(arguments or "{}")
+    except Exception:
+        args = {}
+    if not isinstance(args, dict) or not args:
+        return head + "..."
+    if set(args.keys()) == {"command"} and isinstance(args.get("command"), str):
+        cmd = args["command"]
+        if len(cmd) > 500:
+            cmd = cmd[:497] + "..."
+        return f"{head}\n```\n{cmd}\n```"
+    keys = list(args.keys())
+    args_str = json.dumps(args, ensure_ascii=False, default=str)
+    if len(args_str) > 40:
+        args_str = args_str[:37] + "..."
+    return f"{head}({keys})\n{args_str}"
+
+
+def _reason_block(reasoning: str) -> str:
+    """Render reasoning in the gateway's Discord subtext style."""
+    r = (reasoning or "").strip()
+    if not r:
+        return ""
+    lines = "\n".join("-# " + ln if ln.strip() else "-#" for ln in r.split("\n"))
+    return f"-# 💭 Reasoning\n{lines}\n\n"
+
+
+def _render_card(snap: dict) -> str:
+    """Mirror of hooks/stats-card/handler.py render()."""
+    parts = []
+    tps = snap.get("last_call_gen_tok_s") or snap.get("last_call_eff_tok_s")
+    if tps is not None:
+        parts.append(f"⚡ {tps:g} tok/s")
+    ttfb = snap.get("last_call_ttfb_s")
+    if ttfb is not None:
+        parts.append(f"ttfb {ttfb:g}s")
+    dur = snap.get("turn_duration_s")
+    if dur is not None:
+        parts.append(f"{dur:g}s")
+
+    def fmt(n):
+        try:
+            return f"{int(n):,}"
+        except Exception:
+            return "0"
+
+    parts.append(f"{fmt(snap.get('out_tokens'))} out / {fmt(snap.get('in_tokens'))} in")
+    cache = snap.get("cache_hit_pct")
+    if cache:
+        parts.append(f"{cache}% cache")
+    calls = int(snap.get("calls") or 1)
+    if calls > 1:
+        parts.append(f"{calls} calls")
+        avg_in = snap.get("avg_in_per_call")
+        if avg_in is not None:
+            parts.append(f"avg {fmt(round(avg_in))} in/call")
+    cost = snap.get("cost_usd")
+    if cost is not None:
+        parts.append(f"${cost:.4f}")
+    return " · ".join(parts)
+
+
+def _read_card_state():
+    try:
+        p = os.path.join(os.path.dirname(env_path()), "stats", "card_state.json")
+        with open(p) as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _post_chunked(channel_id: str, text: str) -> list:
+    ids = []
+    chunks = _chunks(text)
+    n = len(chunks)
+    for i, chunk in enumerate(chunks, 1):
+        if not chunk.strip():
+            continue
+        body = chunk if n == 1 else f"{chunk} ({i}/{n})"
+        resp = _post_discord_message(channel_id, body)
+        ids.append(resp.get("id"))
+    return ids
+
+
+def _mirror_turn_once(session_id: str, since: float, dry: bool = False):
+    """Relay a completed turn natively: tool lines, reasoning+reply, stats card."""
+    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        sess = con.execute(
+            "SELECT source, thread_id FROM sessions WHERE id=?", (session_id,)
+        ).fetchone()
+        if sess is None:
+            return {"ok": False, "error": "unknown session"}
+        if sess["source"] != "discord" or not sess["thread_id"]:
+            return {"ok": False, "error": "no discord thread for session"}
+        rows = con.execute(
+            "SELECT id, role, content, tool_calls, tool_name, reasoning, timestamp "
+            "FROM messages WHERE session_id=? AND timestamp >= ? ORDER BY id",
+            (session_id, since - 2),
+        ).fetchall()
+    finally:
+        con.close()
+
+    # Turn boundary: the last user echo at/after `since`; everything after it.
+    user_rows = [r for r in rows if r["role"] == "user"]
+    if not user_rows:
+        return {"ok": False, "error": "no user message found after `since`"}
+    turn_start_id = user_rows[-1]["id"]
+    turn = [r for r in rows if r["id"] > turn_start_id]
+
+    assistants = [r for r in turn if r["role"] == "assistant"]
+    if not assistants:
+        return {"ok": False, "error": "no assistant messages yet"}
+    last_asst_id = assistants[-1]["id"]
+
+    posts = []
+    for r in assistants:
+        content = r["content"] or ""
+        try:
+            tool_calls = json.loads(r["tool_calls"]) if r["tool_calls"] else []
+        except Exception:
+            tool_calls = []
+        if r["id"] == last_asst_id:
+            text = _reason_block(r["reasoning"]) + content
+            if text.strip():
+                posts.append(text)
+        else:
+            if content.strip():
+                posts.append(content)
+        for tc in tool_calls or []:
+            fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+            line = _tool_call_line(str(fn.get("name") or "?"), str(fn.get("arguments") or ""))
+            if line:
+                posts.append(line)
+
+    # Stats card: read fresh card_state for THIS session (brief wait — the
+    # recorder writes it at turn end).
+    snap = None
+    card_deadline = time.time() + 2.5
+    while True:
+        cand = _read_card_state()
+        if isinstance(cand, dict) and cand.get("session_id") == session_id:
+            try:
+                if float(cand.get("ts") or 0) >= since - 10:
+                    snap = cand
+                    break
+            except Exception:
+                pass
+        if time.time() >= card_deadline:
+            break
+        time.sleep(0.3)
+    if snap is not None:
+        card = _render_card(snap)
+        if card:
+            posts.append(card)
+
+    if dry:
+        return {"ok": True, "dry": True, "posts": len(posts), "preview": [p[:300] for p in posts]}
+    target = sess["thread_id"]
+    ids = []
+    for post in posts:
+        ids.extend(_post_chunked(target, post))
+    return {"ok": True, "posts": len(posts), "chunks": len(ids), "message_ids": ids}
+
+
+def mirror_turn(session_id: str, since: float, dry: bool = False):
+    """Relay a completed turn; retries briefly while the turn's writes land."""
+    deadline = time.time() + 4.0
+    while True:
+        res = _mirror_turn_once(session_id, since, dry)
+        pending = res.get("error") in {
+            "no assistant messages yet",
+            "no user message found after `since`",
+        }
+        if res.get("ok") or not pending or time.time() >= deadline:
+            return res
+        time.sleep(0.5)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.split("?")[0] == "/stats/card":
+            if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
+                self._json(401, {"error": "unauthorized"})
+                return
+            try:
+                from urllib.parse import parse_qs, urlparse
+
+                q = parse_qs(urlparse(self.path).query)
+                sid = (q.get("session_id") or [""])[0]
+                since = float((q.get("since") or ["0"])[0] or 0)
+                deadline = time.time() + 4.0
+                while True:
+                    snap = _read_card_state()
+                    if isinstance(snap, dict) and snap.get("session_id") == sid:
+                        try:
+                            if float(snap.get("ts") or 0) >= since - 10:
+                                self._json(200, {"ok": True, "card": _render_card(snap), "snap": snap})
+                                return
+                        except Exception:
+                            pass
+                    if time.time() >= deadline:
+                        self._json(200, {"ok": False, "error": "no fresh card"})
+                        return
+                    time.sleep(0.4)
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
         if self.path == "/health":
             self._json(200, {"ok": True, "service": "atlas-hub"})
             return
@@ -304,18 +528,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?")[0]
-        if path == "/mirror":
+        if path in ("/mirror", "/mirror_turn"):
             if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
                 self._json(401, {"error": "unauthorized"})
                 return
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
-                res = mirror_message(
-                    str(body.get("session_id") or ""),
-                    str(body.get("role") or ""),
-                    str(body.get("content") or ""),
-                )
+                if path == "/mirror":
+                    res = mirror_message(
+                        str(body.get("session_id") or ""),
+                        str(body.get("role") or ""),
+                        str(body.get("content") or ""),
+                    )
+                else:
+                    res = mirror_turn(
+                        str(body.get("session_id") or ""),
+                        float(body.get("since") or 0),
+                        bool(body.get("dry") or False),
+                    )
                 self._json(200, res)
             except Exception as e:
                 self._json(500, {"error": str(e)})

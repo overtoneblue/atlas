@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -78,6 +79,74 @@ func (h *Hub) FetchTree(ctx context.Context) (*HubTree, error) {
 		return nil, err
 	}
 	return &t, nil
+}
+
+// MirrorTurn relays a completed turn into the session's Discord thread with
+// native-style artifacts (tool lines, reasoning + reply, stats card).
+// Returns (false, nil) when the session has no Discord binding.
+func (h *Hub) MirrorTurn(ctx context.Context, sessionID string, since float64) (bool, error) {
+	body, err := json.Marshal(map[string]any{"session_id": sessionID, "since": since})
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.BaseURL+"/mirror_turn", bytes.NewReader(body))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.Key)
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return false, fmt.Errorf("mirror_turn: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, err
+	}
+	if !out.OK {
+		if out.Error == "no discord thread for session" || out.Error == "unknown session" {
+			return false, nil
+		}
+		return false, fmt.Errorf("mirror_turn: %s", out.Error)
+	}
+	return true, nil
+}
+
+// Card fetches the rendered stats card for a finished turn, if fresh.
+func (h *Hub) Card(ctx context.Context, sessionID string, since float64) (string, error) {
+	u := fmt.Sprintf("%s/stats/card?session_id=%s&since=%f", h.BaseURL, url.QueryEscape(sessionID), since)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+h.Key)
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("stats/card: HTTP %d", resp.StatusCode)
+	}
+	var out struct {
+		OK   bool   `json:"ok"`
+		Card string `json:"card"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	if !out.OK {
+		return "", nil
+	}
+	return out.Card, nil
 }
 
 // Mirror relays one message into the session's Discord thread when the

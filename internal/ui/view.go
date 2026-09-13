@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -165,6 +166,9 @@ func (m Model) liveTranscript(width int) []string {
 	for _, msg := range msgs {
 		lines = append(lines, renderMessage(msg, width)...)
 	}
+	if m.lastCard != "" && m.cardFor == m.openID {
+		lines = append(lines, styleMag.Render("  "+m.lastCard))
+	}
 	if m.streaming {
 		lines = append(lines, styleMauve.Render(" Nolan")+styleDim.Render(" · streaming"))
 		buf := cleanText(m.streamBuf)
@@ -223,11 +227,16 @@ func renderMessage(msg hermes.Message, width int) []string {
 		out = append(out, "")
 	case "assistant":
 		out = append(out, styleMauve.Render(" Nolan")+styleDim.Render(" · "+ts))
+		if r := cleanText(msg.Reasoning); r != "" {
+			for _, l := range wrapIndent("💭 "+r, width, "   ", 3) {
+				out = append(out, styleFaint.Render(l))
+			}
+		}
 		if c := cleanText(msg.Content); c != "" {
 			out = append(out, wrapIndent(c, width, "   ", 10)...)
 		}
 		for _, tc := range msg.ToolCalls {
-			out = append(out, styleMag.Render("   ▸ tool · "+tc.Function.Name))
+			out = append(out, styleMag.Render("   ▸ "+toolLabel(tc.Function.Name, tc.Function.Arguments)))
 		}
 		out = append(out, "")
 	case "tool":
@@ -236,6 +245,46 @@ func renderMessage(msg hermes.Message, width int) []string {
 	default:
 	}
 	return out
+}
+
+// toolEmojis mirrors the gateway's per-tool display emojis (registry default ⚙️).
+var toolEmojis = map[string]string{
+	"terminal": "💻", "close_terminal": "🖥️", "read_terminal": "🖥️",
+	"patch": "🔧", "read_file": "📖", "write_file": "✍️", "search_files": "🔎",
+	"discord": "⚙️", "discord_admin": "⚙️", "process_manage": "⚙️",
+	"delegate_task": "🔀", "memory": "🧠", "web_search": "🌐", "web_extract": "🌐",
+	"browser_navigate": "🌐", "vision_analyze": "🖼️", "todo_list": "📋",
+	"cronjob_manage": "⏰", "skill_manage": "📖", "skill_view": "📖",
+	"skills_list": "📖", "clarify": "❓", "code_execution": "🐍",
+}
+
+// toolLabel renders "emoji name · preview" for a tool call row.
+func toolLabel(name, args string) string {
+	emoji := toolEmojis[name]
+	if emoji == "" {
+		emoji = "⚙️"
+	}
+	head := emoji + " " + name
+	var m map[string]any
+	if json.Unmarshal([]byte(args), &m) == nil && len(m) > 0 {
+		pick := ""
+		if c, ok := m["command"].(string); ok {
+			pick = c
+		}
+		if pick == "" {
+			for _, v := range m {
+				if s, ok := v.(string); ok && s != "" {
+					pick = s
+					break
+				}
+			}
+		}
+		pick = firstLine(cleanText(pick))
+		if pick != "" {
+			return head + " · " + truncLine(pick, 44)
+		}
+	}
+	return head
 }
 
 func (m Model) renderRail() []string {
@@ -330,7 +379,7 @@ func (m Model) renderStatus(width int) string {
 	if m.streaming {
 		mode = "STREAM"
 	}
-	left := " " + mode + " · atlas 0.4.0 · " + m.status
+	left := " " + mode + " · atlas 0.5.0 · " + m.status
 	right := "? help"
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1

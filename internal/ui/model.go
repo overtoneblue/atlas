@@ -48,14 +48,18 @@ type Model struct {
 	openLast  float64
 
 	// composer / streaming
-	inserting     bool
-	input         string
-	streaming     bool
-	streamBuf     string
-	streamCh      chan hermes.ChatEvent
-	streamCancel  context.CancelFunc
-	helpVisible   bool
-	replyMirrored bool
+	inserting    bool
+	input        string
+	streaming    bool
+	streamBuf    string
+	streamCh     chan hermes.ChatEvent
+	streamCancel context.CancelFunc
+	helpVisible  bool
+
+	// turn mirror / stats
+	turnStart float64
+	lastCard  string
+	cardFor   string
 }
 
 // New returns the initial model.
@@ -152,6 +156,31 @@ func mirrorMessage(h *hermes.Hub, sessionID, role, content string) tea.Cmd {
 	}
 }
 
+type cardMsg struct {
+	sessionID string
+	line      string
+	err       error
+}
+
+type turnMirrorMsg struct {
+	ok  bool
+	err error
+}
+
+func fetchCard(h *hermes.Hub, sessionID string, since float64) tea.Cmd {
+	return func() tea.Msg {
+		line, err := h.Card(context.Background(), sessionID, since)
+		return cardMsg{sessionID: sessionID, line: line, err: err}
+	}
+}
+
+func mirrorTurnCmd(h *hermes.Hub, sessionID string, since float64) tea.Cmd {
+	return func() tea.Msg {
+		ok, err := h.MirrorTurn(context.Background(), sessionID, since)
+		return turnMirrorMsg{ok: ok, err: err}
+	}
+}
+
 func waitStream(ch chan hermes.ChatEvent) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
@@ -222,10 +251,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.ev.Content != "" {
 				m.streamBuf = msg.ev.Content
 			}
-			if m.hub.Configured() && !m.replyMirrored && msg.ev.Content != "" && m.openID != "" {
-				m.replyMirrored = true
-				return m, tea.Batch(waitStream(m.streamCh), mirrorMessage(m.hub, m.openID, "assistant", msg.ev.Content))
-			}
 		case "tool.started":
 			if msg.ev.ToolName != "" {
 				m.status = "tool · " + msg.ev.ToolName
@@ -239,14 +264,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "mirror failed: " + msg.err.Error()
 		}
 		return m, nil
+	case cardMsg:
+		if msg.err == nil && msg.line != "" {
+			m.lastCard = msg.line
+			m.cardFor = msg.sessionID
+		}
+		return m, nil
+	case turnMirrorMsg:
+		if msg.err != nil {
+			m.status = "mirror failed: " + msg.err.Error()
+		}
+		return m, nil
 	case streamClosedMsg:
 		m.streaming = false
 		m.streamBuf = ""
 		m.streamCh = nil
 		m.streamCancel = nil
 		m.status = "turn complete"
-		if c := m.client; c.Configured() && m.openID != "" {
-			return m, fetchMessages(c, m.openID)
+		var cmds []tea.Cmd
+		if m.client.Configured() && m.openID != "" {
+			cmds = append(cmds, fetchMessages(m.client, m.openID))
+		}
+		if m.hub.Configured() && m.openID != "" {
+			cmds = append(cmds, fetchCard(m.hub, m.openID, m.turnStart))
+			cmds = append(cmds, mirrorTurnCmd(m.hub, m.openID, m.turnStart))
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
 		}
 	case tea.KeyMsg:
 		if m.helpVisible {
@@ -365,7 +409,9 @@ func (m *Model) beginTurn(text string) tea.Cmd {
 		Timestamp: float64(time.Now().Unix()),
 	})
 	m.status = "streaming…"
-	m.replyMirrored = false
+	m.turnStart = float64(time.Now().Unix()) - 1
+	m.lastCard = ""
+	m.cardFor = ""
 	ctx, cancel := context.WithCancel(context.Background())
 	m.streamCancel = cancel
 	ch := make(chan hermes.ChatEvent, 256)

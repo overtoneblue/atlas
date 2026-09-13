@@ -74,6 +74,7 @@ type Message struct {
 	Content   string     `json:"content"`
 	ToolName  string     `json:"tool_name"`
 	ToolCalls []ToolCall `json:"tool_calls"`
+	Reasoning string     `json:"reasoning"`
 	Timestamp float64    `json:"timestamp"`
 }
 
