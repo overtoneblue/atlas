@@ -17,7 +17,7 @@ import (
 	"atlas/internal/ui"
 )
 
-const version = "0.7.1"
+const version = "0.8.0"
 
 func main() {
 	var (

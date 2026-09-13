@@ -8,12 +8,11 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.7.1 — per-turn stats cards + approval notes.** The latest turn's
-stats card persists on open and `c` flips to per-turn cards under every reply
-(session spend in the rail, from the same `metrics.jsonl` the Discord card
-plugin uses). Tool results decided by the approval layer render distinctly:
-amber `⚠` for flagged/decided commands, red `⛔` for blocked/denied ones.
-Plus 0.6.0 scrollback/search, 0.5.0 native-parity mirror.
+Status: **0.8.0 — live tree + unread + kill switch.** The tree auto-refreshes
+(new posts and activity appear without pressing `R`), posts with activity since
+your last visit show a gold `●` dot (client-side read state in
+`~/.config/atlas/state.json`), and `x` stops a running turn. Plus 0.7.x
+per-turn cards + approval notes, 0.6.0 scrollback/search, 0.5.0 native mirror.
 
 ## Mirror
 

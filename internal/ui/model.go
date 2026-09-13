@@ -78,13 +78,19 @@ type Model struct {
 	cardsFor   string
 	sessTotal  hermes.SessionTotal
 	totalFor   string
+
+	// live refresh / unread / stop
+	read      map[string]float64
+	readDirty bool
+	lastSave  time.Time
+	activeRun string
 }
 
 // New returns the initial model.
 func New() Model {
 	c := hermes.NewFromEnv()
 	h := hermes.NewHubFromEnv()
-	m := Model{client: c, hub: h, focus: 0}
+	m := Model{client: c, hub: h, focus: 0, read: loadReadState()}
 	if !c.Configured() {
 		m.tree = demoTree()
 		m.status = "demo data · set ATLAS_API_KEY for live (0.3.0)"
@@ -104,6 +110,7 @@ func (m Model) OpenSession(id string) Model {
 	m.openMsgs = 0
 	m.openLast = 0
 	m.status = "opened " + id
+	m.markRead(id)
 	return m
 }
 
@@ -121,6 +128,7 @@ func (m Model) Init() tea.Cmd {
 			cmds = append(cmds, fetchTurnCards(m.hub, m.openID))
 		}
 	}
+	cmds = append(cmds, tickCmd())
 	return tea.Batch(cmds...)
 }
 
@@ -142,6 +150,23 @@ type messagesMsg struct {
 
 type streamEventMsg struct{ ev hermes.ChatEvent }
 type streamClosedMsg struct{}
+type stopRunMsg struct{ err error }
+type tickMsg time.Time
+
+// tickCmd schedules the quiet periodic refresh (tree + sessions, transcript
+// only while parked at the tail).
+func tickCmd() tea.Cmd {
+	return tea.Tick(10*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+// stopRunCmd asks the API server to interrupt a running turn.
+func stopRunCmd(c *hermes.Client, runID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return stopRunMsg{err: c.StopRun(ctx, runID)}
+	}
+}
 
 func fetchSessions(c *hermes.Client) tea.Cmd {
 	return func() tea.Msg {
@@ -334,6 +359,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case streamEventMsg:
+		if msg.ev.RunID != "" {
+			m.activeRun = msg.ev.RunID
+		}
 		switch msg.ev.Event {
 		case "assistant.delta":
 			m.streamBuf += msg.ev.Delta
@@ -365,11 +393,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "mirror failed: " + msg.err.Error()
 		}
 		return m, nil
+	case tickMsg:
+		var cmds []tea.Cmd
+		if m.client.Configured() {
+			cmds = append(cmds, fetchSessions(m.client))
+			if m.openID != "" && !m.streaming && m.scroll == 0 {
+				cmds = append(cmds, fetchMessages(m.client, m.openID))
+			}
+		}
+		if m.hub.Configured() {
+			cmds = append(cmds, fetchHubTree(m.hub))
+		}
+		// Parked on the open post at the tail = still reading it; keep the
+		// read mark current so activity we can see never shows as unread.
+		if m.openID != "" && m.scroll == 0 && !m.inserting && !m.searchMode && !m.helpVisible {
+			m.markRead(m.openID)
+		}
+		cmds = append(cmds, tickCmd())
+		return m, tea.Batch(cmds...)
+	case stopRunMsg:
+		if msg.err != nil {
+			m.status = "stop failed: " + msg.err.Error()
+		} else {
+			m.status = "stop requested — the turn is aborting"
+		}
+		return m, nil
 	case streamClosedMsg:
 		m.streaming = false
 		m.streamBuf = ""
 		m.streamCh = nil
 		m.streamCancel = nil
+		m.activeRun = ""
 		m.status = "turn complete"
 		var cmds []tea.Cmd
 		if m.client.Configured() && m.openID != "" {
@@ -413,6 +467,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "q", "ctrl+c":
+			saveReadState(m.read)
 			m.interrupt()
 			return m, tea.Quit
 		case "i":
@@ -477,6 +532,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 			m.status = "nothing to refresh (demo mode)"
+		case "x":
+			if m.activeRun != "" {
+				m.status = "stopping the running turn…"
+				return m, stopRunCmd(m.client, m.activeRun)
+			}
+			m.status = "no active turn to stop"
 		case "tab", "shift+tab":
 			m.focus = (m.focus + 1) % 2
 		case "enter":
@@ -692,6 +753,52 @@ func (m *Model) interrupt() {
 	}
 }
 
+// ---- unread / read-state ----
+
+// markRead records that a session was just seen; persisted lazily.
+func (m *Model) markRead(id string) {
+	if id == "" {
+		return
+	}
+	if m.read == nil {
+		m.read = map[string]float64{}
+	}
+	m.read[id] = float64(time.Now().Unix())
+	m.readDirty = true
+	m.maybeSaveRead()
+}
+
+// maybeSaveRead persists read state at most once per 30s while dirty.
+func (m *Model) maybeSaveRead() {
+	if !m.readDirty || time.Since(m.lastSave) < 30*time.Second {
+		return
+	}
+	saveReadState(m.read)
+	m.readDirty = false
+	m.lastSave = time.Now()
+}
+
+// unread reports whether the node's session has activity newer than its read
+// mark. A session never opened in Atlas reads as unread (dot until first open).
+func (m Model) unread(n treeNode) bool {
+	if n.sessionID == "" || n.lastActive == 0 {
+		return false
+	}
+	seen, ok := m.read[n.sessionID]
+	return !ok || n.lastActive > seen+1
+}
+
+// unreadCount counts unread posts in the current tree.
+func (m Model) unreadCount() int {
+	c := 0
+	for _, n := range m.tree {
+		if n.kind == kindPost && m.unread(n) {
+			c++
+		}
+	}
+	return c
+}
+
 // autoOpen opens the first post in the tree when nothing is open yet.
 func (m *Model) autoOpen() tea.Cmd {
 	if m.openID != "" || !m.client.Configured() {
@@ -710,6 +817,7 @@ func (m *Model) open(n treeNode) tea.Cmd {
 	m.openTitle = n.label
 	m.openMsgs = n.msgCount
 	m.openLast = n.lastActive
+	m.markRead(n.sessionID)
 	m.messages = nil
 	m.scroll = 0
 	m.lastCard = ""

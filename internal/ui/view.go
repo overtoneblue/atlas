@@ -84,14 +84,22 @@ func (m Model) renderTree() []string {
 		if i == m.cursor {
 			mark = styleYel.Render("▸")
 		}
-		lines = append(lines, mark+indent+styleDim.Render(glyph)+styled)
+		glyphStyled := styleDim.Render(glyph)
+		if n.kind == kindPost && m.unread(n) {
+			glyphStyled = styleGold.Render("● ")
+		}
+		lines = append(lines, mark+indent+glyphStyled+styled)
 	}
 	lines = append(lines, "")
 	posts := countPosts(m.tree)
 	if posts > 0 {
+		mid := styleDim.Render(fmt.Sprintf(" %d posts", posts))
+		if u := m.unreadCount(); u > 0 {
+			mid += styleDim.Render(" · ") + styleGold.Render(fmt.Sprintf("%d unread", u))
+		}
 		lines = append(lines,
 			styleDim.Render(" ─────────────"),
-			styleDim.Render(fmt.Sprintf(" %d posts · ", posts))+styleGreen.Render(m.modeLabel()),
+			mid+styleDim.Render(" · ")+styleGreen.Render(m.modeLabel()),
 		)
 	} else {
 		lines = append(lines,
@@ -227,7 +235,8 @@ func helpLines(width int) []string {
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "i")) + " insert mode — write a message",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " send it (while in insert mode)",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "esc")) + " leave insert · detach · back to bottom",
-		"  " + styleYel.Render(fmt.Sprintf("%-9s", "R")) + " refresh tree + sessions",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "x")) + " stop the running turn",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "R")) + " refresh now (tree auto-refreshes)",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "?")) + " this panel",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "q")) + " quit",
 		"",
@@ -415,7 +424,13 @@ func (m Model) renderRail() []string {
 		lines = append(lines,
 			styleDim.Render(" ───────────"),
 			styleTitle.Render(" TREE"),
-			styleGreen.Render(" ● ")+styleDim.Render(fmt.Sprintf("%d posts", countPosts(m.tree))),
+		)
+		postLine := styleGreen.Render(" ● ") + styleDim.Render(fmt.Sprintf("%d posts", countPosts(m.tree)))
+		if u := m.unreadCount(); u > 0 {
+			postLine += styleDim.Render(" · ") + styleGold.Render(fmt.Sprintf("%d unread", u))
+		}
+		lines = append(lines,
+			postLine,
 			"",
 			styleDim.Render(" ───────────"),
 			styleTitle.Render(" MODE"),
@@ -499,8 +514,11 @@ func (m Model) renderStatus(width int) string {
 	if m.searchMode {
 		foc = "search"
 	}
-	left := " " + mode + " · " + foc + " · atlas 0.7.1 · " + m.status
+	left := " " + mode + " · " + foc + " · atlas 0.8.0 · " + m.status
 	right := "? help"
+	if m.streaming {
+		right = "x stop · ? help"
+	}
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1
 	if gap < 1 {

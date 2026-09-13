@@ -138,6 +138,26 @@ func (c *Client) Messages(ctx context.Context, id string, limit int) ([]Message,
 	return out.Data, nil
 }
 
+// StopRun interrupts a running agent turn (POST /v1/runs/{run_id}/stop).
+func (c *Client) StopRun(ctx context.Context, runID string) error {
+	u := fmt.Sprintf("%s/v1/runs/%s/stop", c.BaseURL, url.PathEscape(runID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader("{}"))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("POST %s: HTTP %d", u, resp.StatusCode)
+	}
+	return nil
+}
+
 func (c *Client) get(ctx context.Context, u string, dst any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
