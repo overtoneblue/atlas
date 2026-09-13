@@ -1,0 +1,6 @@
+# nix build output
+/result
+/result-*
+
+# local `go build` output
+/atlas
