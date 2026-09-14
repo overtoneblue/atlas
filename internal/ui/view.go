@@ -22,26 +22,21 @@ func (m Model) RenderFrame(width, height int) string {
 		return "atlas: terminal too small (min 72×16)\n"
 	}
 
-	showRail := width >= 100
-	leftW, railW := 30, 26
-	if !showRail {
-		railW = 0
-	}
-	seps := 1
-	if showRail {
-		seps = 2
-	}
-	midW := width - leftW - railW - seps
+	showTree, showRail, leftW, railW, midW := m.layoutWidths(width)
 	contentH := height - 1 // full-width status bar; composer lives in the middle column
 	transcriptH := contentH - 3
 
 	sep := strings.TrimSuffix(strings.Repeat(styleSep.Render("│")+"\n", contentH), "\n")
 
-	left := padBlock(strings.Join(m.renderTree(contentH), "\n"), leftW, contentH)
 	midTop := padBlock(strings.Join(m.renderTranscript(midW, transcriptH), "\n"), midW, transcriptH)
 	mid := midTop + "\n" + m.renderInputBox(midW)
 
-	blocks := []string{left, sep, mid}
+	var blocks []string
+	if showTree {
+		left := padBlock(strings.Join(m.renderTree(contentH), "\n"), leftW, contentH)
+		blocks = append(blocks, left, sep)
+	}
+	blocks = append(blocks, mid)
 	if showRail {
 		rail := padBlock(strings.Join(m.renderRail(), "\n"), railW, contentH)
 		blocks = append(blocks, sep, rail)
@@ -288,6 +283,8 @@ func helpLines(width int) []string {
 		"",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "j / k")) + " move tree · scroll transcript",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "tab")) + " focus: tree ⇄ transcript",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "1 / 2")) + " toggle the tree / rail pane",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "z")) + " focus mode — panes away, z restores",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "g / G")) + " first / last · top / bottom",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "pgup/dn")) + " scroll a screenful",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " open the selected post",
@@ -345,17 +342,60 @@ func renderMessage(msg hermes.Message, width int, expand bool, agentName string,
 	return out
 }
 
-func (m Model) midWidth() int {
-	showRail := m.width >= 100
-	leftW, railW := 30, 26
+// layoutWidths resolves the three-column layout for a total width, honoring
+// the pane toggles (1 = tree, 2 = rail, z = both). The rail additionally
+// requires 100 cols of room.
+func (m Model) layoutWidths(width int) (showTree, showRail bool, leftW, railW, midW int) {
+	showTree = !m.hideTree
+	showRail = width >= 100 && !m.hideRail
+	leftW, railW = 30, 26
+	if !showTree {
+		leftW = 0
+	}
 	if !showRail {
 		railW = 0
 	}
-	seps := 1
-	if showRail {
-		seps = 2
+	panes := 1
+	if showTree {
+		panes++
 	}
-	return m.width - leftW - railW - seps
+	if showRail {
+		panes++
+	}
+	midW = width - leftW - railW - (panes - 1)
+	return
+}
+
+func (m Model) midWidth() int {
+	_, _, _, _, midW := m.layoutWidths(m.width)
+	return midW
+}
+
+// toggleZen hides both panes; pressing z again restores whichever were visible.
+func (m *Model) toggleZen() {
+	if !m.hideTree || !m.hideRail {
+		m.zenPrevTree, m.zenPrevRail = m.hideTree, m.hideRail
+		m.hideTree, m.hideRail = true, true
+		if m.focus == 0 {
+			m.focus = 1
+		}
+	} else {
+		m.hideTree, m.hideRail = m.zenPrevTree, m.zenPrevRail
+	}
+}
+
+// paneStatus reports the current pane toggles in the status line.
+func (m *Model) paneStatus() {
+	switch {
+	case m.hideTree && m.hideRail:
+		m.status = "focus mode — 1 tree · 2 rail · z restores"
+	case m.hideTree:
+		m.status = "tree hidden — 1 shows it"
+	case m.hideRail:
+		m.status = "rail hidden — 2 shows it"
+	default:
+		m.status = "panes: tree + rail"
+	}
 }
 
 // jumpScrollFor computes the scroll offset that puts message msgID at the top
@@ -601,11 +641,14 @@ func (m Model) renderStatus(width int) string {
 	}
 	left := " " + badge.Render(" "+mode+" ") +
 		styleDim.Render(" · "+foc+" · ") +
-		styleFaint.Render("atlas 0.10.0") +
+		styleFaint.Render("atlas 0.10.1") +
 		styleDim.Render(" · "+m.status)
 	right := "? help"
 	if m.streaming {
 		right = "x stop · ? help"
+	}
+	if m.hideTree || m.hideRail {
+		right = "1/2/z panes · " + right
 	}
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1

@@ -8,13 +8,14 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.10.0 — the visual overhaul.** Atlas styles through the terminal's
+Status: **0.10.1 — the visual overhaul.** Atlas styles through the terminal's
 16 ANSI palette by default, so it inherits the surrounding theme (stylix and
 base16 schemes included) instead of fighting it. Tree rows gained guide lines
 and a selection highlight, user messages carry an accent bar, each profile's
 agent gets its own name color, the composer shows the conversation title in
-its border, and the status bar has proper mode badges. `--theme house` pins
-Atlas's original warm palette for unthemed terminals. Feature set unchanged
+its border, and the status bar has proper mode badges. `1`/`2` toggle the
+tree and rail panes, `z` is focus mode. `--theme house` pins Atlas's original
+warm palette for unthemed terminals. Feature set unchanged
 from 0.9.x.
 
 ## Mirror
@@ -70,6 +71,8 @@ Without a key it falls back to demo data.
 | --- | --- |
 | `j` / `k`, `↓` / `↑` | move the tree · scroll the transcript (focused) |
 | `tab` / `shift+tab` | focus: tree ⇄ transcript |
+| `1` / `2` | toggle the tree (left) / rail (right) pane |
+| `z` | focus mode — both panes away; `z` restores what was visible |
 | `g` / `G` | first / last row · scroll top / bottom |
 | `pgup` / `pgdn` | scroll a screenful |
 | `enter` | open the selected post |

@@ -91,3 +91,45 @@ func TestUnreadCount(t *testing.T) {
 		t.Fatalf("unreadCount = %d, want 2", got)
 	}
 }
+
+func TestLayoutWidths(t *testing.T) {
+	cases := []struct {
+		name               string
+		w                  int
+		hideTree, hideRail bool
+		wantTree, wantRail bool
+		wantMid            int
+	}{
+		{"default wide", 140, false, false, true, true, 140 - 30 - 26 - 2},
+		{"tree hidden", 140, true, false, false, true, 140 - 26 - 1},
+		{"rail hidden", 140, false, true, true, false, 140 - 30 - 1},
+		{"both hidden", 140, true, true, false, false, 140},
+		{"narrow keeps rail off", 90, false, false, true, false, 90 - 30 - 1},
+		{"narrow tree hidden", 90, true, false, false, false, 90},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := Model{width: c.w, hideTree: c.hideTree, hideRail: c.hideRail}
+			st, sr, _, _, mid := m.layoutWidths(c.w)
+			if st != c.wantTree || sr != c.wantRail || mid != c.wantMid {
+				t.Fatalf("tree=%v rail=%v mid=%d, want tree=%v rail=%v mid=%d",
+					st, sr, mid, c.wantTree, c.wantRail, c.wantMid)
+			}
+		})
+	}
+}
+
+func TestZenRestore(t *testing.T) {
+	m := Model{hideRail: true}
+	m.toggleZen()
+	if !m.hideTree || !m.hideRail {
+		t.Fatalf("zen should hide both, got tree=%v rail=%v", m.hideTree, m.hideRail)
+	}
+	m.toggleZen()
+	if m.hideTree || !m.hideRail {
+		t.Fatalf("zen restore should keep prior rail-hidden state, got tree=%v rail=%v", m.hideTree, m.hideRail)
+	}
+	if m.focus != 1 {
+		t.Fatalf("zen should focus the transcript, got focus=%d", m.focus)
+	}
+}

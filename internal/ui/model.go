@@ -44,6 +44,12 @@ type Model struct {
 	lastCard  string
 	cardFor   string
 
+	// pane layout (focused mode: 1 = tree, 2 = rail, z = both)
+	hideTree    bool
+	hideRail    bool
+	zenPrevTree bool
+	zenPrevRail bool
+
 	// transcript interaction
 	scroll      int
 	expandAll   bool
@@ -316,6 +322,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "search — type a query, enter runs it"
 		case "e":
 			m.expandAll = !m.expandAll
+		case "1":
+			m.hideTree = !m.hideTree
+			if m.hideTree && m.focus == 0 {
+				m.focus = 1
+			}
+			m.paneStatus()
+		case "2":
+			m.hideRail = !m.hideRail
+			m.paneStatus()
+		case "z":
+			m.toggleZen()
+			m.paneStatus()
 		case "c":
 			m.showCards = !m.showCards
 			if m.showCards {
