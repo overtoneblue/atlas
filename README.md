@@ -8,12 +8,14 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.9.0 — multi-profile.** The tree carries every Hermes profile as its
-own root (`◆ Nolan`, `◆ Debbie`), each keeping the Discord shape where it's
-bound (guild → categories → channels → threads) and source-grouped lists where
-it isn't. Opening, reading, sending, stopping, search, cards and the mirror all
-route through the right profile — sessions, read marks, and per-profile API
-keys are scoped. Feature set otherwise unchanged from 0.8.x.
+Status: **0.10.0 — the visual overhaul.** Atlas styles through the terminal's
+16 ANSI palette by default, so it inherits the surrounding theme (stylix and
+base16 schemes included) instead of fighting it. Tree rows gained guide lines
+and a selection highlight, user messages carry an accent bar, each profile's
+agent gets its own name color, the composer shows the conversation title in
+its border, and the status bar has proper mode badges. `--theme house` pins
+Atlas's original warm palette for unthemed terminals. Feature set unchanged
+from 0.9.x.
 
 ## Mirror
 

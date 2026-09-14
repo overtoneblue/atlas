@@ -20,6 +20,7 @@ type treeNode struct {
 	kind       nodeKind
 	sessionID  string
 	profile    string
+	guide      string // tree-guide prefix ("│  " / "   " segments), set by treeFromHub
 	msgCount   int
 	lastActive float64
 }
@@ -62,8 +63,8 @@ func treeFromSessions(ss []hermes.Session) []treeNode {
 
 func treeFromHub(sections []hermes.HubNode) []treeNode {
 	var out []treeNode
-	var walk func(n hermes.HubNode, depth int)
-	walk = func(n hermes.HubNode, depth int) {
+	var walk func(n hermes.HubNode, depth int, guide string, last bool)
+	walk = func(n hermes.HubNode, depth int, guide string, last bool) {
 		var kind nodeKind
 		switch n.Kind {
 		case "profile":
@@ -83,15 +84,26 @@ func treeFromHub(sections []hermes.HubNode) []treeNode {
 			kind:       kind,
 			sessionID:  n.SessionID,
 			profile:    n.Profile,
+			guide:      guide,
 			msgCount:   n.MessageCount,
 			lastActive: n.LastActive,
 		})
-		for _, c := range n.Children {
-			walk(c, depth+1)
+		// Guide prefix for children: continue the vertical bar unless this node
+		// is the last among its siblings. Direct children of section roots get
+		// a plain indent (sections are not continuation columns).
+		childGuide := guide + "  "
+		if depth > 0 {
+			childGuide = guide + "│ "
+			if last {
+				childGuide = guide + "  "
+			}
+		}
+		for i, c := range n.Children {
+			walk(c, depth+1, childGuide, i == len(n.Children)-1)
 		}
 	}
-	for _, s := range sections {
-		walk(s, 0)
+	for i, s := range sections {
+		walk(s, 0, "", i == len(sections)-1)
 	}
 	return out
 }

@@ -17,7 +17,7 @@ import (
 	"atlas/internal/ui"
 )
 
-const version = "0.9.0"
+const version = "0.10.0"
 
 func main() {
 	var (
@@ -27,6 +27,7 @@ func main() {
 		showVer  = flag.Bool("version", false, "print version and exit")
 		openID   = flag.String("open", "", "open this session id at startup")
 		profile  = flag.String("profile", "default", "profile owning the --open session")
+		theme    = flag.String("theme", "", "color theme: terminal (default, inherits your palette) or house")
 	)
 	flag.Parse()
 
@@ -35,6 +36,7 @@ func main() {
 		return
 	}
 
+	ui.Configure(*theme)
 	m := ui.New().OpenSession(*openID, *profile)
 
 	if *onceMode {

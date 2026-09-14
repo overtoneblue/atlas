@@ -57,45 +57,69 @@ func (m Model) renderTree(viewH int) []string {
 		styleDim.Render(" ───────────"),
 	}
 	var rows []string
+	cursorRow := 0
 	for i, n := range m.tree {
-		indent := strings.Repeat("  ", min(n.depth, 3))
-		glyph := "· "
-		switch n.kind {
-		case kindProfile:
-			glyph = "◆ "
-		case kindGuild:
-			glyph = "≡ "
-		case kindCategory:
-			glyph = "▾ "
-		case kindChannel:
-			glyph = "# "
+		if n.kind == kindProfile && i > 0 {
+			rows = append(rows, "") // breathing room between profile sections
 		}
-		budget := 30 - 1 - len(indent) - len(glyph) - 1
-		label := truncLine(n.label, budget)
-		var styled string
-		switch n.kind {
-		case kindProfile:
-			styled = styleRoot.Render(label)
-		case kindGuild:
-			styled = styleTitle.Render(label)
-		case kindCategory:
-			styled = styleGold.Render(label)
-		case kindChannel:
-			styled = styleChan.Render(label)
-		default:
-			styled = stylePost.Render(label)
+		selected := i == m.cursor
+		if selected {
+			cursorRow = len(rows)
 		}
+		// paint applies the selection background to every segment (nested
+		// styles reset attributes, so each piece carries the bg itself).
+		paint := func(st lipgloss.Style, s string) string {
+			if selected {
+				st = st.Background(th.SelBg)
+			}
+			return st.Render(s)
+		}
+
 		mark := " "
-		if i == m.cursor {
-			mark = styleYel.Render("▸")
+		if selected {
+			mark = "▸"
 		}
-		glyphStyled := styleDim.Render(glyph)
-		if n.kind == kindPost && m.unread(n) {
-			glyphStyled = styleGold.Render("● ")
+		glyph := "· "
+		gstyle := styleFaint
+		var lstyle lipgloss.Style
+		switch n.kind {
+		case kindProfile:
+			glyph, gstyle = "◆ ", styleFgHi
+			lstyle = styleTitle
+		case kindGuild:
+			glyph, gstyle = "≡ ", styleFaint
+			lstyle = styleFgHi
+		case kindCategory:
+			glyph, gstyle = "▾ ", styleDim
+			lstyle = styleYellow
+		case kindChannel:
+			glyph, gstyle = "# ", styleFaint
+			lstyle = styleChan
+		default:
+			if m.unread(n) {
+				glyph, gstyle = "● ", styleGold
+				lstyle = styleFgHi
+			} else {
+				lstyle = stylePost
+			}
 		}
-		rows = append(rows, mark+indent+glyphStyled+styled)
+		plain := mark + n.guide + glyph + n.label
+		budget := 30 - 1 - ansi.StringWidth(n.guide) - ansi.StringWidth(glyph) - 1
+		if budget < 6 {
+			budget = 6
+		}
+		label := truncLine(n.label, budget)
+		seg := paint(styleFaint, mark) +
+			paint(styleFaint, n.guide) +
+			paint(gstyle, glyph) +
+			paint(lstyle, label)
+		if pad := 30 - ansi.StringWidth(plain); pad > 0 {
+			seg += paint(lipgloss.NewStyle(), strings.Repeat(" ", pad))
+		}
+		rows = append(rows, seg)
 	}
-	foot := []string{"", styleDim.Render(" ─────────────")}
+
+	foot := []string{"", styleFaint.Render(" ─────────────")}
 	posts := countPosts(m.tree)
 	if posts > 0 {
 		mid := styleDim.Render(fmt.Sprintf(" %d posts", posts))
@@ -115,14 +139,13 @@ func (m Model) renderTree(viewH int) []string {
 	}
 	start := 0
 	if len(rows) > avail {
-		start = clampInt(m.cursor-avail/2, 0, len(rows)-avail)
+		start = clampInt(cursorRow-avail/2, 0, len(rows)-avail)
 	}
 	end := min(len(rows), start+avail)
-	vis := rows[start:end]
 
-	out := make([]string, 0, len(head)+len(vis)+len(foot))
+	out := make([]string, 0, len(head)+avail+len(foot))
 	out = append(out, head...)
-	out = append(out, vis...)
+	out = append(out, rows[start:end]...)
 	out = append(out, foot...)
 	return out
 }
@@ -209,7 +232,11 @@ func (m Model) transcriptLines(width int) ([]string, map[int]int) {
 	}
 	for _, msg := range msgs {
 		idx[msg.ID] = len(lines)
-		lines = append(lines, renderMessage(msg, width, m.expandAll, m.assistantLabel())...)
+		nameStyle := styleBlue
+		if m.openProfile != "" && m.openProfile != "default" {
+			nameStyle = stylePurple
+		}
+		lines = append(lines, renderMessage(msg, width, m.expandAll, m.assistantLabel(), nameStyle)...)
 		if m.showCards && msg.Role == "assistant" {
 			if line, ok := m.cardLines[msg.ID]; ok {
 				for _, l := range wrapIndent(line, width, "  ", 3) {
@@ -224,7 +251,11 @@ func (m Model) transcriptLines(width int) ([]string, map[int]int) {
 		}
 	}
 	if m.streaming {
-		lines = append(lines, styleMauve.Render(" "+m.assistantLabel())+styleDim.Render(" · streaming"))
+		ns := styleBlue
+		if m.openProfile != "" && m.openProfile != "default" {
+			ns = stylePurple
+		}
+		lines = append(lines, ns.Render(" "+m.assistantLabel())+styleDim.Render(" · streaming"))
 		buf := cleanText(m.streamBuf)
 		if buf == "" {
 			buf = "…"
@@ -276,7 +307,7 @@ func helpLines(width int) []string {
 	}
 }
 
-func renderMessage(msg hermes.Message, width int, expand bool, agentName string) []string {
+func renderMessage(msg hermes.Message, width int, expand bool, agentName string, nameStyle lipgloss.Style) []string {
 	userMax, asstMax, reasonMax := 6, 10, 3
 	if expand {
 		userMax, asstMax, reasonMax = 400, 600, 12
@@ -286,10 +317,15 @@ func renderMessage(msg hermes.Message, width int, expand bool, agentName string)
 	switch msg.Role {
 	case "user":
 		out = append(out, styleBlu.Render(" Overtoneblue")+styleDim.Render(" · "+ts))
-		out = append(out, wrapIndent(cleanText(string(msg.Content)), width, "   ", userMax)...)
+		for _, l := range wrapIndent(cleanText(string(msg.Content)), width, "   ", userMax) {
+			if strings.HasPrefix(l, "   ") {
+				l = styleBlu.Render("▏") + "  " + l[3:]
+			}
+			out = append(out, l)
+		}
 		out = append(out, "")
 	case "assistant":
-		out = append(out, styleMauve.Render(" "+agentName)+styleDim.Render(" · "+ts))
+		out = append(out, nameStyle.Render(" "+agentName)+styleDim.Render(" · "+ts))
 		if r := cleanText(string(msg.Reasoning)); r != "" {
 			for _, l := range wrapIndent("💭 "+r, width, "   ", reasonMax) {
 				out = append(out, styleFaint.Render(l))
@@ -495,19 +531,20 @@ func kv(k, v string) string {
 }
 
 // renderInputBox draws the composer as a bordered box at the bottom of the
-// conversation column — 3 rows (border + input + border), exactly `width` wide.
+// conversation column — 3 rows (border + input + border), exactly `width`
+// wide, with the open conversation's title set into the top border.
 func (m Model) renderInputBox(width int) string {
-	inner := width - 2 // lipgloss Width() includes padding; the border adds 2 more
+	inner := width - 2
 	if inner < 10 {
 		inner = 10
 	}
-	borderCol := colDim
+	bcol := th.Dim
 	var line string
 	switch {
 	case m.inserting:
-		borderCol = colGreen
+		bcol = th.Green
 		text := m.input
-		budget := inner - 5 // "❯ " + cursor cell + margin
+		budget := inner - 5
 		if budget < 4 {
 			budget = 4
 		}
@@ -517,26 +554,40 @@ func (m Model) renderInputBox(width int) string {
 		}
 		line = styleGreen.Render("❯ ") + text + styleYel.Render("▍")
 	case m.streaming:
-		borderCol = colMauve
-		line = styleMauve.Render("❯ ") + styleDim.Render("turn in flight — esc detaches")
+		bcol = th.Purple
+		line = stylePurple.Render("❯ ") + styleDim.Render("turn in flight — esc detaches · x stops it")
 	default:
 		line = styleDim.Render("❯ press ") + styleYel.Render("i") + styleDim.Render(" to write a message")
 	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderCol).
-		Padding(0, 1).
-		Width(inner).
-		Render(line)
+
+	title := " message "
+	if m.openTitle != "" {
+		title = " " + truncLine(m.openTitle, max(8, width-18)) + " "
+	}
+	bord := lipgloss.NewStyle().Foreground(bcol)
+
+	rest := width - ansi.StringWidth("╭─") - ansi.StringWidth(title) - 1
+	if rest < 1 {
+		rest = 1
+	}
+	top := bord.Render("╭─") + styleDim.Render(title) + bord.Render(strings.Repeat("─", rest)+"╮")
+	midW := width - 4
+	pad := midW - ansi.StringWidth(line)
+	if pad < 0 {
+		pad = 0
+	}
+	mid := bord.Render("│ ") + line + strings.Repeat(" ", pad) + bord.Render(" │")
+	bot := bord.Render("╰" + strings.Repeat("─", width-2) + "╯")
+	return top + "\n" + mid + "\n" + bot
 }
 
 func (m Model) renderStatus(width int) string {
-	mode := "NORMAL"
+	mode, badge := "NORMAL", styleBadgeN
 	if m.inserting {
-		mode = "INSERT"
+		mode, badge = "INSERT", styleBadgeI
 	}
 	if m.streaming {
-		mode = "STREAM"
+		mode, badge = "STREAM", styleBadgeS
 	}
 	foc := "tree"
 	if m.focus == 1 {
@@ -548,7 +599,10 @@ func (m Model) renderStatus(width int) string {
 	if m.searchMode {
 		foc = "search"
 	}
-	left := " " + mode + " · " + foc + " · atlas 0.9.0 · " + m.status
+	left := " " + badge.Render(" "+mode+" ") +
+		styleDim.Render(" · "+foc+" · ") +
+		styleFaint.Render("atlas 0.10.0") +
+		styleDim.Render(" · "+m.status)
 	right := "? help"
 	if m.streaming {
 		right = "x stop · ? help"
