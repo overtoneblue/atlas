@@ -21,6 +21,7 @@ type hubMsg struct {
 
 type messagesMsg struct {
 	sessionID string
+	profile   string
 	messages  []hermes.Message
 	err       error
 }
@@ -37,11 +38,11 @@ func tickCmd() tea.Cmd {
 }
 
 // stopRunCmd asks the API server to interrupt a running turn.
-func stopRunCmd(c *hermes.Client, runID string) tea.Cmd {
+func stopRunCmd(c *hermes.Client, profile, runID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return stopRunMsg{err: c.StopRun(ctx, runID)}
+		return stopRunMsg{err: c.StopRun(ctx, profile, runID)}
 	}
 }
 
@@ -59,10 +60,10 @@ func fetchHubTree(h *hermes.Hub) tea.Cmd {
 	}
 }
 
-func fetchMessages(c *hermes.Client, id string) tea.Cmd {
+func fetchMessages(c *hermes.Client, profile, id string) tea.Cmd {
 	return func() tea.Msg {
-		ms, err := c.Messages(context.Background(), id, 100000)
-		return messagesMsg{sessionID: id, messages: ms, err: err}
+		ms, err := c.Messages(context.Background(), profile, id, 100000)
+		return messagesMsg{sessionID: id, profile: profile, messages: ms, err: err}
 	}
 }
 

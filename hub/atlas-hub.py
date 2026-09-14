@@ -30,10 +30,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 DISCORD_API = "https://discord.com/api/v10"
 
 
-def env_path() -> str:
-    return os.environ.get("ATLAS_HUB_ENV") or os.path.join(
-        os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes"), ".env"
-    )
+def hermes_home() -> str:
+    return os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+
+
+def env_path(profile_home: str = "") -> str:
+    if profile_home:
+        return os.path.join(profile_home, ".env")
+    return os.environ.get("ATLAS_HUB_ENV") or os.path.join(hermes_home(), ".env")
 
 
 def read_env_file(path: str) -> dict:
@@ -53,63 +57,97 @@ def read_env_file(path: str) -> dict:
 ENV = read_env_file(env_path())
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN") or ENV.get("DISCORD_BOT_TOKEN", "")
 AUTH = os.environ.get("API_SERVER_KEY") or ENV.get("API_SERVER_KEY", "")
-DB = os.environ.get("ATLAS_HUB_DB") or os.path.join(os.path.dirname(env_path()), "state.db")
 PORT = int(os.environ.get("ATLAS_HUB_PORT", "8643"))
-PROFILE = os.environ.get("ATLAS_HUB_PROFILE", "default")
 CACHE_TTL = float(os.environ.get("ATLAS_HUB_CACHE", "300"))
 
+
+def discover_profiles():
+    """Profile registry: the hermes home (default) + every profiles/<name>/.
+
+    Each entry carries its own state.db and its own Discord bot token (read
+    from that profile's .env). Profiles without a state.db are skipped.
+    ATLAS_HUB_PROFILES=default,debbie optionally narrows the registry.
+    """
+    home = hermes_home()
+    reg = [{"name": "default", "home": home, "display": "Nolan"}]
+    pdir = os.path.join(home, "profiles")
+    if os.path.isdir(pdir):
+        for name in sorted(os.listdir(pdir)):
+            d = os.path.join(pdir, name)
+            if name.startswith(".") or not os.path.isdir(d):
+                continue
+            reg.append({"name": name, "home": d, "display": name.capitalize()})
+    out = []
+    for p in reg:
+        penv = read_env_file(os.path.join(p["home"], ".env"))
+        p["token"] = penv.get("DISCORD_BOT_TOKEN") or (TOKEN if p["name"] == "default" else "")
+        p["db"] = (os.environ.get("ATLAS_HUB_DB") if p["name"] == "default" else "") or os.path.join(p["home"], "state.db")
+        p["stats"] = os.path.join(p["home"], "stats")
+        if os.path.exists(p["db"]):
+            out.append(p)
+    filt = [s.strip() for s in os.environ.get("ATLAS_HUB_PROFILES", "").split(",") if s.strip()]
+    if filt:
+        out = [p for p in out if p["name"] in filt]
+    return out
+
+
+PROFILES = discover_profiles()
+
 _cache = {
-    "guilds": None,
-    "guilds_at": 0.0,
-    "channels": {},        # guild_id -> {channel_id: channel_obj}
-    "channels_at": {},     # guild_id -> fetched_at
-    "thread_parent": {},   # thread_id -> parent channel_id (or None)
+    "guilds": {},          # profile -> guilds
+    "guilds_at": {},
+    "channels": {},        # (profile, guild_id) -> {channel_id: channel_obj}
+    "channels_at": {},
+    "thread_parent": {},   # (profile, thread_id) -> parent channel_id (or None)
 }
 
 
-def discord_get(path: str):
+def discord_get(path: str, token: str):
     req = urllib.request.Request(
         DISCORD_API + path,
-        headers={"Authorization": f"Bot {TOKEN}", "User-Agent": "atlas-hub/0.1"},
+        headers={"Authorization": f"Bot {token}", "User-Agent": "atlas-hub/0.1"},
     )
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.load(r)
 
 
-def get_guilds():
+def get_guilds(prof):
+    key = prof["name"]
     now = time.time()
-    if _cache["guilds"] is None or now - _cache["guilds_at"] > CACHE_TTL:
-        _cache["guilds"] = discord_get("/users/@me/guilds")
-        _cache["guilds_at"] = now
-    return _cache["guilds"]
+    if key not in _cache["guilds"] or now - _cache["guilds_at"].get(key, 0.0) > CACHE_TTL:
+        _cache["guilds"][key] = discord_get("/users/@me/guilds", prof["token"])
+        _cache["guilds_at"][key] = now
+    return _cache["guilds"][key]
 
 
-def channel_map(guild_id: str):
+def channel_map(guild_id: str, prof):
+    key = (prof["name"], guild_id)
     now = time.time()
-    if guild_id not in _cache["channels"] or now - _cache["channels_at"].get(guild_id, 0.0) > CACHE_TTL:
-        chans = discord_get(f"/guilds/{guild_id}/channels")
-        _cache["channels"][guild_id] = {c["id"]: c for c in chans}
-        _cache["channels_at"][guild_id] = now
-    return _cache["channels"][guild_id]
+    if key not in _cache["channels"] or now - _cache["channels_at"].get(key, 0.0) > CACHE_TTL:
+        chans = discord_get(f"/guilds/{guild_id}/channels", prof["token"])
+        _cache["channels"][key] = {c["id"]: c for c in chans}
+        _cache["channels_at"][key] = now
+    return _cache["channels"][key]
 
 
-def resolve_thread_parent(thread_id: str):
+def resolve_thread_parent(thread_id: str, prof):
     """Threads are not listed in guild channels; fetch once and cache."""
-    if thread_id in _cache["thread_parent"]:
-        return _cache["thread_parent"][thread_id]
+    key = (prof["name"], thread_id)
+    if key in _cache["thread_parent"]:
+        return _cache["thread_parent"][key]
     try:
-        c = discord_get(f"/channels/{thread_id}")
+        c = discord_get(f"/channels/{thread_id}", prof["token"])
         parent = c.get("parent_id")
     except Exception:
         parent = None
-    _cache["thread_parent"][thread_id] = parent
+    _cache["thread_parent"][key] = parent
     return parent
 
 
-def resolve_location(chat_id: str, thread_id: str):
+def resolve_location(chat_id: str, thread_id: str, prof):
     """Return (guild_id, channel_obj, category_obj) for a session, or None."""
-    for g in get_guilds():
-        cmap = channel_map(g["id"])
+    for g in get_guilds(prof):
+        cmap = channel_map(g["id"], prof)
         # direct channel session
         if chat_id and chat_id in cmap:
             chan = cmap[chat_id]
@@ -117,7 +155,7 @@ def resolve_location(chat_id: str, thread_id: str):
             return g["id"], chan, cat if (cat and cat.get("type") == 4) else None
         # thread session: thread_id -> parent channel
         if thread_id:
-            parent = resolve_thread_parent(thread_id)
+            parent = resolve_thread_parent(thread_id, prof)
             if parent and parent in cmap:
                 chan = cmap[parent]
                 cat = cmap.get(chan.get("parent_id") or "", None)
@@ -125,26 +163,45 @@ def resolve_location(chat_id: str, thread_id: str):
     return None
 
 
-def load_sessions():
-    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+def find_session(session_id: str):
+    """(profile, row) for a session id across every profile db, else (None, None)."""
+    for prof in PROFILES:
+        con = sqlite3.connect(f"file:{prof['db']}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            row = con.execute(
+                "SELECT source, thread_id, chat_id FROM sessions WHERE id=?", (session_id,)
+            ).fetchone()
+        finally:
+            con.close()
+        if row is not None:
+            return prof, row
+    return None, None
+
+
+def load_sessions(prof):
+    con = sqlite3.connect(f"file:{prof['db']}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
+        # Each db belongs to one profile; the default db additionally carries
+        # legacy NULL-profile rows (pre-multiprofile sessions of the same profile).
         return con.execute(
             "SELECT id, source, chat_id, chat_type, thread_id, display_name, title, "
             "last_activity_at, message_count, pinned "
-            "FROM sessions WHERE hidden=0 AND archived=0 AND profile_name=? "
+            "FROM sessions WHERE hidden=0 AND archived=0 AND (profile_name=? OR profile_name IS NULL) "
             "ORDER BY last_activity_at DESC",
-            (PROFILE,),
+            (prof["name"],),
         ).fetchall()
     finally:
         con.close()
 
 
-def post_node(row):
+def post_node(row, prof):
     return {
         "kind": "post",
         "name": row["title"] or row["display_name"] or row["id"],
         "session_id": row["id"],
+        "profile": prof["name"],
         "chat_type": row["chat_type"],
         "last_active": row["last_activity_at"] or 0,
         "message_count": row["message_count"] or 0,
@@ -154,33 +211,47 @@ def post_node(row):
 
 def build_tree():
     errors = []
-    rows = load_sessions()
+    sections = []
+    for prof in PROFILES:
+        try:
+            node = build_profile_section(prof, errors)
+        except Exception as e:
+            errors.append(f"profile {prof['name']}: {e}")
+            continue
+        if node is not None:
+            sections.append(node)
+    return {"generated_at": time.time(), "sections": sections, "errors": errors}
 
+
+def build_profile_section(prof, errors):
+    """One profile's subtree: discord guilds + other sources, or None when empty."""
+    rows = load_sessions(prof)
     discord_rows = [r for r in rows if r["source"] == "discord"]
     other_rows = [r for r in rows if r["source"] != "discord"]
 
+    children = []
+
     # ---- Discord side: guild -> category -> channel -> posts
-    guilds_out = {}  # guild_id -> {name, categories: {name: {channels: {name: [posts]}}}}
+    guilds_out = {}  # guild_id -> {name, cats: {name: {chans: {name: [posts]}}}}
     unfiled = []
     for r in discord_rows:
         try:
-            loc = resolve_location(r["chat_id"], r["thread_id"])
+            loc = resolve_location(r["chat_id"], r["thread_id"], prof)
         except Exception as e:
             errors.append(f"resolve {r['id']}: {e}")
             loc = None
         if not loc:
-            unfiled.append(post_node(r))
+            unfiled.append(post_node(r, prof))
             continue
         gid, chan, cat = loc
-        gname = next((g["name"] for g in get_guilds() if g["id"] == gid), gid)
+        gname = next((g["name"] for g in get_guilds(prof) if g["id"] == gid), gid)
         g = guilds_out.setdefault(gid, {"name": gname, "cats": {}})
         ckey = cat["name"] if cat else "Unfiled"
         corder = cat.get("position", 99) if cat else 9999
         c = g["cats"].setdefault(ckey, {"order": corder, "chans": {}})
         ch = c["chans"].setdefault(chan["name"], {"order": chan.get("position", 99), "posts": []})
-        ch["posts"].append(post_node(r))
+        ch["posts"].append(post_node(r, prof))
 
-    sections = []
     for gid, g in sorted(guilds_out.items()):
         cat_nodes = []
         for cname in sorted(g["cats"], key=lambda k: (g["cats"][k]["order"], k)):
@@ -193,39 +264,41 @@ def build_tree():
             if chan_nodes:
                 cat_nodes.append({"kind": "category", "name": cname, "children": chan_nodes})
         if cat_nodes:
-            sections.append({"kind": "guild", "name": g["name"], "children": cat_nodes})
+            children.append({"kind": "guild", "name": g["name"], "children": cat_nodes})
 
     # ---- Other sources: one category, one channel per source
     if other_rows:
         by_source = {}
         for r in other_rows:
-            by_source.setdefault(r["source"], []).append(post_node(r))
+            by_source.setdefault(r["source"], []).append(post_node(r, prof))
         chan_nodes = [
             {"kind": "channel", "name": src, "children": sorted(posts, key=lambda p: -p["last_active"])}
             for src, posts in sorted(by_source.items())
         ]
-        sections.append({"kind": "category", "name": "Other sessions", "children": chan_nodes})
+        children.append({"kind": "category", "name": "Other sessions", "children": chan_nodes})
 
     if unfiled:
-        sections.append({
+        children.append({
             "kind": "category",
             "name": "Unfiled",
             "children": [{"kind": "channel", "name": "unknown", "children": unfiled}],
         })
 
-    return {"generated_at": time.time(), "sections": sections, "errors": errors}
+    if not children:
+        return None
+    return {"kind": "profile", "name": prof["display"], "profile": prof["name"], "children": children}
 
 
 # ---- mirror: relay atlas-originated messages into discord threads ----
 
-def _post_discord_message(channel_id: str, content: str):
+def _post_discord_message(channel_id: str, content: str, token: str):
     payload = json.dumps({"content": content}).encode()
     req = urllib.request.Request(
         f"{DISCORD_API}/channels/{channel_id}/messages",
         data=payload,
         method="POST",
         headers={
-            "Authorization": f"Bot {TOKEN}",
+            "Authorization": f"Bot {token}",
             "Content-Type": "application/json",
             "User-Agent": "atlas-hub/0.1",
         },
@@ -256,18 +329,12 @@ def _chunks(text: str, limit: int = 1900):
 def mirror_message(session_id: str, role: str, content: str):
     """Post one message into the session's Discord thread (if it has one).
 
-    The posts are made by the Nolan bot; the gateway hard-drops its own
-    messages on ingest, so mirroring can never re-trigger a turn.
+    The posts are made by the session's own profile bot; each gateway
+    hard-drops its own bot's messages on ingest, so mirroring can never
+    re-trigger a turn.
     """
-    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
-    try:
-        row = con.execute(
-            "SELECT source, thread_id, chat_id FROM sessions WHERE id=?", (session_id,)
-        ).fetchone()
-    finally:
-        con.close()
-    if row is None:
+    prof, row = find_session(session_id)
+    if prof is None or row is None:
         return {"ok": False, "error": "unknown session"}
     if row["source"] != "discord" or not row["thread_id"]:
         return {"ok": False, "error": "no discord thread for session"}
@@ -281,7 +348,7 @@ def mirror_message(session_id: str, role: str, content: str):
     for chunk in _chunks(text):
         if not chunk.strip():
             continue
-        resp = _post_discord_message(target, chunk)
+        resp = _post_discord_message(target, chunk, prof["token"])
         ids.append(resp.get("id"))
     return {"ok": True, "chunks": len(ids), "message_ids": ids}
 
@@ -365,16 +432,16 @@ def _render_card(snap: dict) -> str:
     return " · ".join(parts)
 
 
-def _read_card_state():
+def _read_card_state(prof):
     try:
-        p = os.path.join(os.path.dirname(env_path()), "stats", "card_state.json")
+        p = os.path.join(prof["stats"], "card_state.json")
         with open(p) as fh:
             return json.load(fh)
     except Exception:
         return None
 
 
-def _post_chunked(channel_id: str, text: str) -> list:
+def _post_chunked(channel_id: str, text: str, token: str) -> list:
     ids = []
     chunks = _chunks(text)
     n = len(chunks)
@@ -382,23 +449,21 @@ def _post_chunked(channel_id: str, text: str) -> list:
         if not chunk.strip():
             continue
         body = chunk if n == 1 else f"{chunk} ({i}/{n})"
-        resp = _post_discord_message(channel_id, body)
+        resp = _post_discord_message(channel_id, body, token)
         ids.append(resp.get("id"))
     return ids
 
 
 def _mirror_turn_once(session_id: str, since: float, dry: bool = False):
     """Relay a completed turn natively: tool lines, reasoning+reply, stats card."""
-    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    prof, sess = find_session(session_id)
+    if prof is None or sess is None:
+        return {"ok": False, "error": "unknown session"}
+    if sess["source"] != "discord" or not sess["thread_id"]:
+        return {"ok": False, "error": "no discord thread for session"}
+    con = sqlite3.connect(f"file:{prof['db']}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
-        sess = con.execute(
-            "SELECT source, thread_id FROM sessions WHERE id=?", (session_id,)
-        ).fetchone()
-        if sess is None:
-            return {"ok": False, "error": "unknown session"}
-        if sess["source"] != "discord" or not sess["thread_id"]:
-            return {"ok": False, "error": "no discord thread for session"}
         rows = con.execute(
             "SELECT id, role, content, tool_calls, tool_name, reasoning, timestamp "
             "FROM messages WHERE session_id=? AND timestamp >= ? ORDER BY id",
@@ -444,7 +509,7 @@ def _mirror_turn_once(session_id: str, since: float, dry: bool = False):
     snap = None
     card_deadline = time.time() + 2.5
     while True:
-        cand = _read_card_state()
+        cand = _read_card_state(prof)
         if isinstance(cand, dict) and cand.get("session_id") == session_id:
             try:
                 if float(cand.get("ts") or 0) >= since - 10:
@@ -465,7 +530,7 @@ def _mirror_turn_once(session_id: str, since: float, dry: bool = False):
     target = sess["thread_id"]
     ids = []
     for post in posts:
-        ids.extend(_post_chunked(target, post))
+        ids.extend(_post_chunked(target, post, prof["token"]))
     return {"ok": True, "posts": len(posts), "chunks": len(ids), "message_ids": ids}
 
 
@@ -485,7 +550,10 @@ def mirror_turn(session_id: str, since: float, dry: bool = False):
 
 def _turn_cards(session_id: str):
     """Group metrics.jsonl api_call records into per-turn cards."""
-    path = os.path.join(os.path.dirname(env_path()), "stats", "metrics.jsonl")
+    prof, _ = find_session(session_id)
+    if prof is None:
+        return {"ok": True, "turns": [], "total": {"turns": 0, "calls": 0, "cost_usd": None}}
+    path = os.path.join(prof["stats"], "metrics.jsonl")
     turns = {}
     try:
         with open(path) as fh:
@@ -560,46 +628,49 @@ def _fts_query(q: str) -> str:
 
 
 def search_messages(q: str, limit: int = 40):
-    """Full-text search over session messages (FTS5, LIKE fallback)."""
+    """Full-text search across every profile's message store (FTS5, LIKE fallback)."""
     fts = _fts_query(q)
     if not fts:
         return {"ok": True, "results": []}
-    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
-    try:
+    results = []
+    for prof in PROFILES:
+        con = sqlite3.connect(f"file:{prof['db']}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
         try:
-            rows = con.execute(
-                "SELECT m.id AS message_id, m.session_id, m.role, m.timestamp, "
-                "snippet(messages_fts, 0, '', '', '…', 14) AS snip, s.title "
-                "FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid "
-                "LEFT JOIN sessions s ON s.id = m.session_id "
-                "WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?",
-                (fts, int(limit)),
-            ).fetchall()
-        except sqlite3.OperationalError:
-            like = f"%{q.strip()}%"
-            rows = con.execute(
-                "SELECT id AS message_id, session_id, role, timestamp, "
-                "substr(content, 1, 140) AS snip, (SELECT title FROM sessions s WHERE s.id = messages.session_id) AS title "
-                "FROM messages WHERE content LIKE ? ORDER BY id DESC LIMIT ?",
-                (like, int(limit)),
-            ).fetchall()
-    finally:
-        con.close()
-    return {
-        "ok": True,
-        "results": [
-            {
+            try:
+                rows = con.execute(
+                    "SELECT m.id AS message_id, m.session_id, m.role, m.timestamp, "
+                    "snippet(messages_fts, 0, '', '', '…', 14) AS snip, s.title "
+                    "FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid "
+                    "LEFT JOIN sessions s ON s.id = m.session_id "
+                    "WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?",
+                    (fts, int(limit)),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                like = f"%{q.strip()}%"
+                rows = con.execute(
+                    "SELECT id AS message_id, session_id, role, timestamp, "
+                    "substr(content, 1, 140) AS snip, (SELECT title FROM sessions s WHERE s.id = messages.session_id) AS title "
+                    "FROM messages WHERE content LIKE ? ORDER BY id DESC LIMIT ?",
+                    (like, int(limit)),
+                ).fetchall()
+        except Exception:
+            rows = []
+        finally:
+            con.close()
+        for r in rows:
+            results.append({
                 "message_id": r["message_id"],
                 "session_id": r["session_id"],
                 "role": r["role"],
                 "timestamp": r["timestamp"],
                 "snippet": r["snip"],
                 "title": r["title"],
-            }
-            for r in rows
-        ],
-    }
+                "profile": prof["name"],
+            })
+    # Rank is per-db and not comparable across profiles; merge by recency.
+    results.sort(key=lambda r: -(r.get("timestamp") or 0))
+    return {"ok": True, "results": results[: int(limit)]}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -614,9 +685,13 @@ class Handler(BaseHTTPRequestHandler):
                 q = parse_qs(urlparse(self.path).query)
                 sid = (q.get("session_id") or [""])[0]
                 since = float((q.get("since") or ["0"])[0] or 0)
+                prof, _ = find_session(sid)
+                if prof is None:
+                    self._json(200, {"ok": False, "error": "unknown session"})
+                    return
                 deadline = time.time() + 4.0
                 while True:
-                    snap = _read_card_state()
+                    snap = _read_card_state(prof)
                     if isinstance(snap, dict) and snap.get("session_id") == sid:
                         try:
                             if float(snap.get("ts") or 0) >= since - 10:
@@ -632,7 +707,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(500, {"error": str(e)})
             return
         if self.path == "/health":
-            self._json(200, {"ok": True, "service": "atlas-hub"})
+            self._json(200, {"ok": True, "service": "atlas-hub",
+                             "profiles": [p["name"] for p in PROFILES]})
             return
         if self.path.split("?")[0] == "/stats/turns":
             if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
@@ -714,5 +790,6 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     if not TOKEN:
         print("atlas-hub: WARNING: no DISCORD_BOT_TOKEN found", file=sys.stderr)
-    print(f"atlas-hub on 127.0.0.1:{PORT} (db={DB}, profile={PROFILE})", file=sys.stderr, flush=True)
+    plist = ", ".join(f"{p['name']}({p['display']})" for p in PROFILES) or "none"
+    print(f"atlas-hub on 127.0.0.1:{PORT} — profiles: {plist}", file=sys.stderr, flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

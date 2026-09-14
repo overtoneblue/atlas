@@ -24,9 +24,10 @@ import (
 )
 
 type Client struct {
-	BaseURL string
-	Key     string
-	HTTP    *http.Client
+	BaseURL     string
+	Key         string
+	ProfileKeys map[string]string // profile name (lowercase) -> bearer key
+	HTTP        *http.Client
 }
 
 // NewFromEnv builds a client from the environment (see package docs).
@@ -37,10 +38,56 @@ func NewFromEnv() *Client {
 	}
 	key := resolveKey()
 	return &Client{
-		BaseURL: strings.TrimRight(base, "/"),
-		Key:     key,
-		HTTP:    &http.Client{Timeout: 15 * time.Second},
+		BaseURL:     strings.TrimRight(base, "/"),
+		Key:         key,
+		ProfileKeys: resolveProfileKeys(),
+		HTTP:        &http.Client{Timeout: 15 * time.Second},
 	}
+}
+
+// resolveProfileKeys reads ATLAS_API_KEY_<PROFILE> for secondary profiles from
+// the environment, then the per-user env file (env wins).
+func resolveProfileKeys() map[string]string {
+	out := map[string]string{}
+	for _, kv := range os.Environ() {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if name, found := strings.CutPrefix(k, "ATLAS_API_KEY_"); found && name != "" {
+			out[strings.ToLower(name)] = strings.TrimSpace(v)
+		}
+	}
+	for k, v := range readEnvMap(config.EnvFile()) {
+		if name, found := strings.CutPrefix(k, "ATLAS_API_KEY_"); found && name != "" {
+			if _, exists := out[strings.ToLower(name)]; !exists {
+				out[strings.ToLower(name)] = v
+			}
+		}
+	}
+	return out
+}
+
+// KeyFor returns the bearer key for a profile; "" and "default" mean the
+// primary profile's key.
+func (c *Client) KeyFor(profile string) string {
+	if profile == "" || profile == "default" {
+		return c.Key
+	}
+	return c.ProfileKeys[strings.ToLower(profile)]
+}
+
+// ConfiguredFor reports whether a usable key exists for the profile.
+func (c *Client) ConfiguredFor(profile string) bool {
+	return c != nil && c.KeyFor(profile) != ""
+}
+
+// apiPath prefixes non-default profiles with the gateway's /p/<profile> mount.
+func apiPath(profile, p string) string {
+	if profile == "" || profile == "default" {
+		return p
+	}
+	return "/p/" + url.PathEscape(profile) + p
 }
 
 // resolveKey finds the API bearer key: env -> ~/.config/atlas/env -> hermes home .env.
@@ -123,31 +170,35 @@ func (c *Client) ListSessions(ctx context.Context, limit int) ([]Session, error)
 		Data []Session `json:"data"`
 	}
 	u := fmt.Sprintf("%s/api/sessions?limit=%d", c.BaseURL, limit)
-	if err := c.get(ctx, u, &out); err != nil {
+	if err := c.get(ctx, u, c.Key, &out); err != nil {
 		return nil, err
 	}
 	return out.Data, nil
 }
 
-func (c *Client) Messages(ctx context.Context, id string, limit int) ([]Message, error) {
+func (c *Client) Messages(ctx context.Context, profile, id string, limit int) ([]Message, error) {
 	var out struct {
 		Data []Message `json:"data"`
 	}
-	u := fmt.Sprintf("%s/api/sessions/%s/messages?limit=%d", c.BaseURL, url.PathEscape(id), limit)
-	if err := c.get(ctx, u, &out); err != nil {
+	u := fmt.Sprintf("%s%s/api/sessions/%s/messages?limit=%d", c.BaseURL, apiPath(profile, ""), url.PathEscape(id), limit)
+	if err := c.get(ctx, u, c.KeyFor(profile), &out); err != nil {
 		return nil, err
 	}
 	return out.Data, nil
 }
 
 // StopRun interrupts a running agent turn (POST /v1/runs/{run_id}/stop).
-func (c *Client) StopRun(ctx context.Context, runID string) error {
-	u := fmt.Sprintf("%s/v1/runs/%s/stop", c.BaseURL, url.PathEscape(runID))
+func (c *Client) StopRun(ctx context.Context, profile, runID string) error {
+	key := c.KeyFor(profile)
+	if key == "" {
+		return fmt.Errorf("no API key configured for profile %q", profile)
+	}
+	u := fmt.Sprintf("%s%s/v1/runs/%s/stop", c.BaseURL, apiPath(profile, ""), url.PathEscape(runID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader("{}"))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Key)
+	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -160,12 +211,12 @@ func (c *Client) StopRun(ctx context.Context, runID string) error {
 	return nil
 }
 
-func (c *Client) get(ctx context.Context, u string, dst any) error {
+func (c *Client) get(ctx context.Context, u, key string, dst any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Key)
+	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return err
@@ -192,21 +243,31 @@ func hermesEnvPath() string {
 
 // readKeyFromEnvFile reads ATLAS_API_KEY or API_SERVER_KEY from KEY=VALUE lines.
 func readKeyFromEnvFile(path string) string {
+	m := readEnvMap(path)
+	if v := m["ATLAS_API_KEY"]; v != "" {
+		return v
+	}
+	return m["API_SERVER_KEY"]
+}
+
+// readEnvMap parses KEY=VALUE lines from an env file (missing file = empty map).
+func readEnvMap(path string) map[string]string {
+	out := map[string]string{}
 	if path == "" {
-		return ""
+		return out
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return out
 	}
 	for _, line := range strings.Split(string(b), "\n") {
 		line = strings.TrimSpace(line)
-		if v, ok := strings.CutPrefix(line, "ATLAS_API_KEY="); ok {
-			return strings.TrimSpace(v)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
 		}
-		if v, ok := strings.CutPrefix(line, "API_SERVER_KEY="); ok {
-			return strings.TrimSpace(v)
+		if k, v, ok := strings.Cut(line, "="); ok {
+			out[strings.TrimSpace(k)] = strings.TrimSpace(v)
 		}
 	}
-	return ""
+	return out
 }

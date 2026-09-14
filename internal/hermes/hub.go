@@ -18,6 +18,7 @@ type HubNode struct {
 	Kind         string    `json:"kind"`
 	Name         string    `json:"name"`
 	SessionID    string    `json:"session_id,omitempty"`
+	Profile      string    `json:"profile,omitempty"`
 	ChatType     string    `json:"chat_type,omitempty"`
 	LastActive   float64   `json:"last_active,omitempty"`
 	MessageCount int       `json:"message_count,omitempty"`
@@ -153,6 +154,7 @@ func (h *Hub) Card(ctx context.Context, sessionID string, since float64) (string
 type SearchHit struct {
 	MessageID int     `json:"message_id"`
 	SessionID string  `json:"session_id"`
+	Profile   string  `json:"profile"`
 	Role      string  `json:"role"`
 	Timestamp float64 `json:"timestamp"`
 	Snippet   string  `json:"snippet"`

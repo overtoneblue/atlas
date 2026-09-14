@@ -55,15 +55,24 @@ func saveReadState(read map[string]float64) {
 
 // ---- unread / read-state ----
 
+// readKey scopes a read mark to its profile; default-profile marks stay bare
+// (back-compat with existing state files).
+func readKey(profile, id string) string {
+	if profile == "" || profile == "default" {
+		return id
+	}
+	return profile + "~" + id
+}
+
 // markRead records that a session was just seen; persisted lazily.
-func (m *Model) markRead(id string) {
+func (m *Model) markRead(profile, id string) {
 	if id == "" {
 		return
 	}
 	if m.read == nil {
 		m.read = map[string]float64{}
 	}
-	m.read[id] = float64(time.Now().Unix())
+	m.read[readKey(profile, id)] = float64(time.Now().Unix())
 	m.readDirty = true
 	m.maybeSaveRead()
 }
@@ -84,7 +93,7 @@ func (m Model) unread(n treeNode) bool {
 	if n.sessionID == "" || n.lastActive == 0 {
 		return false
 	}
-	seen, ok := m.read[n.sessionID]
+	seen, ok := m.read[readKey(n.profile, n.sessionID)]
 	return !ok || n.lastActive > seen+1
 }
 

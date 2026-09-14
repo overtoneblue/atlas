@@ -31,17 +31,21 @@ type ChatEvent struct {
 
 // ChatStream runs one agent turn over SSE, invoking onEvent per event.
 // It returns when the stream ends (done event / EOF / error / ctx cancel).
-func (c *Client) ChatStream(ctx context.Context, sessionID, input string, onEvent func(ChatEvent)) error {
+func (c *Client) ChatStream(ctx context.Context, profile, sessionID, input string, onEvent func(ChatEvent)) error {
+	key := c.KeyFor(profile)
+	if key == "" {
+		return fmt.Errorf("no API key configured for profile %q", profile)
+	}
 	body, err := json.Marshal(map[string]string{"input": input})
 	if err != nil {
 		return err
 	}
-	u := fmt.Sprintf("%s/api/sessions/%s/chat/stream", c.BaseURL, url.PathEscape(sessionID))
+	u := fmt.Sprintf("%s%s/api/sessions/%s/chat/stream", c.BaseURL, apiPath(profile, ""), url.PathEscape(sessionID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Key)
+	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 

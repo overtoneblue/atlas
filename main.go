@@ -17,7 +17,7 @@ import (
 	"atlas/internal/ui"
 )
 
-const version = "0.8.1"
+const version = "0.9.0"
 
 func main() {
 	var (
@@ -26,6 +26,7 @@ func main() {
 		height   = flag.Int("height", 40, "frame height for --once")
 		showVer  = flag.Bool("version", false, "print version and exit")
 		openID   = flag.String("open", "", "open this session id at startup")
+		profile  = flag.String("profile", "default", "profile owning the --open session")
 	)
 	flag.Parse()
 
@@ -34,7 +35,7 @@ func main() {
 		return
 	}
 
-	m := ui.New().OpenSession(*openID)
+	m := ui.New().OpenSession(*openID, *profile)
 
 	if *onceMode {
 		// Piped output loses TTY color detection; force truecolor so the

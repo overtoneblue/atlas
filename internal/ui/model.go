@@ -24,10 +24,11 @@ type Model struct {
 	sessions []hermes.Session
 	messages []hermes.Message
 
-	openID    string
-	openTitle string
-	openMsgs  int
-	openLast  float64
+	openID      string
+	openProfile string
+	openTitle   string
+	openMsgs    int
+	openLast    float64
 
 	// composer / streaming
 	inserting    bool
@@ -83,16 +84,19 @@ func New() Model {
 }
 
 // OpenSession pins the app to one session id at startup (--open).
-func (m Model) OpenSession(id string) Model {
+func (m Model) OpenSession(id, profile string) Model {
 	if id == "" {
 		return m
 	}
 	m.openID = id
+	if profile != "" {
+		m.openProfile = profile
+	}
 	m.openTitle = id
 	m.openMsgs = 0
 	m.openLast = 0
 	m.status = "opened " + id
-	m.markRead(id)
+	m.markRead(m.openProfile, id)
 	return m
 }
 
@@ -101,7 +105,7 @@ func (m Model) Init() tea.Cmd {
 	if m.client.Configured() {
 		cmds = append(cmds, fetchSessions(m.client))
 		if m.openID != "" {
-			cmds = append(cmds, fetchMessages(m.client, m.openID))
+			cmds = append(cmds, fetchMessages(m.client, m.openProfile, m.openID))
 		}
 	}
 	if m.hub.Configured() {
@@ -163,7 +167,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "messages load failed: " + msg.err.Error()
 			return m, nil
 		}
-		if m.openID == msg.sessionID {
+		if m.openID == msg.sessionID && m.openProfile == msg.profile {
 			m.messages = msg.messages
 			if m.cardsFor == m.openID {
 				m.cardLines = assignCards(m.messages, m.turnCards)
@@ -227,7 +231,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.client.Configured() {
 			cmds = append(cmds, fetchSessions(m.client))
 			if m.openID != "" && !m.streaming && m.scroll == 0 {
-				cmds = append(cmds, fetchMessages(m.client, m.openID))
+				cmds = append(cmds, fetchMessages(m.client, m.openProfile, m.openID))
 			}
 		}
 		if m.hub.Configured() {
@@ -236,7 +240,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Parked on the open post at the tail = still reading it; keep the
 		// read mark current so activity we can see never shows as unread.
 		if m.openID != "" && m.scroll == 0 && !m.inserting && !m.searchMode && !m.helpVisible {
-			m.markRead(m.openID)
+			m.markRead(m.openProfile, m.openID)
 		}
 		cmds = append(cmds, tickCmd())
 		return m, tea.Batch(cmds...)
@@ -256,7 +260,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "turn complete"
 		var cmds []tea.Cmd
 		if m.client.Configured() && m.openID != "" {
-			cmds = append(cmds, fetchMessages(m.client, m.openID))
+			cmds = append(cmds, fetchMessages(m.client, m.openProfile, m.openID))
 		}
 		if m.hub.Configured() && m.openID != "" {
 			cmds = append(cmds, fetchCard(m.hub, m.openID, m.turnStart))
@@ -351,7 +355,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.client.Configured() {
 				cmds = append(cmds, fetchSessions(m.client))
 				if m.openID != "" {
-					cmds = append(cmds, fetchMessages(m.client, m.openID))
+					cmds = append(cmds, fetchMessages(m.client, m.openProfile, m.openID))
 				}
 			}
 			if m.hub.Configured() {
@@ -364,7 +368,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "x":
 			if m.activeRun != "" {
 				m.status = "stopping the running turn…"
-				return m, stopRunCmd(m.client, m.activeRun)
+				return m, stopRunCmd(m.client, m.openProfile, m.activeRun)
 			}
 			m.status = "no active turn to stop"
 		case "tab", "shift+tab":
@@ -526,7 +530,7 @@ func (m *Model) jumpTo(hit hermes.SearchHit) tea.Cmd {
 		m.status = fmt.Sprintf("jumped to message %d", hit.MessageID)
 		return nil
 	}
-	n := treeNode{label: hit.Title, kind: kindPost, sessionID: hit.SessionID}
+	n := treeNode{label: hit.Title, kind: kindPost, sessionID: hit.SessionID, profile: hit.Profile}
 	cmd := m.open(n)
 	m.jumpMsgID = hit.MessageID
 	m.status = "opening " + hit.Title
@@ -552,10 +556,11 @@ func (m *Model) beginTurn(text string) tea.Cmd {
 	ch := make(chan hermes.ChatEvent, 256)
 	m.streamCh = ch
 	id := m.openID
+	profile := m.openProfile
 	c := m.client
 	go func() {
 		defer close(ch)
-		err := c.ChatStream(ctx, id, text, func(ev hermes.ChatEvent) {
+		err := c.ChatStream(ctx, profile, id, text, func(ev hermes.ChatEvent) {
 			select {
 			case ch <- ev:
 			case <-ctx.Done():
@@ -599,10 +604,11 @@ func (m *Model) autoOpen() tea.Cmd {
 
 func (m *Model) open(n treeNode) tea.Cmd {
 	m.openID = n.sessionID
+	m.openProfile = n.profile
 	m.openTitle = n.label
 	m.openMsgs = n.msgCount
 	m.openLast = n.lastActive
-	m.markRead(n.sessionID)
+	m.markRead(n.profile, n.sessionID)
 	m.messages = nil
 	m.scroll = 0
 	m.lastCard = ""
@@ -611,7 +617,7 @@ func (m *Model) open(n treeNode) tea.Cmd {
 	m.cardsFor = ""
 	m.sessTotal = hermes.SessionTotal{}
 	m.totalFor = ""
-	cmds := []tea.Cmd{fetchMessages(m.client, n.sessionID)}
+	cmds := []tea.Cmd{fetchMessages(m.client, m.openProfile, n.sessionID)}
 	if m.hub.Configured() {
 		cmds = append(cmds, fetchTurnCards(m.hub, n.sessionID))
 	}
@@ -657,7 +663,7 @@ func (m Model) LoadSync() Model {
 			m.openMsgs = s.MessageCount
 			m.openLast = s.LastActive
 		}
-		if ms, err := m.client.Messages(ctx, m.openID, 100000); err == nil {
+		if ms, err := m.client.Messages(ctx, m.openProfile, m.openID, 100000); err == nil {
 			m.messages = ms
 		}
 		return m
@@ -665,10 +671,11 @@ func (m Model) LoadSync() Model {
 	for _, n := range m.tree {
 		if n.kind == kindPost && n.sessionID != "" {
 			m.openID = n.sessionID
+			m.openProfile = n.profile
 			m.openTitle = n.label
 			m.openMsgs = n.msgCount
 			m.openLast = n.lastActive
-			if ms, err := m.client.Messages(ctx, n.sessionID, 100000); err == nil {
+			if ms, err := m.client.Messages(ctx, m.openProfile, n.sessionID, 100000); err == nil {
 				m.messages = ms
 			}
 			break

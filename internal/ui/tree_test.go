@@ -8,31 +8,37 @@ import (
 
 func TestTreeFromHub(t *testing.T) {
 	sections := []hermes.HubNode{{
-		Kind: "guild", Name: "server",
+		Kind: "profile", Name: "Nolan", Profile: "default",
 		Children: []hermes.HubNode{{
-			Kind: "category", Name: "cat",
+			Kind: "guild", Name: "server",
 			Children: []hermes.HubNode{{
-				Kind: "channel", Name: "chan",
-				Children: []hermes.HubNode{
-					{Kind: "post", Name: "p2", SessionID: "s2", LastActive: 20},
-					{Kind: "post", Name: "p1", SessionID: "s1", LastActive: 10},
-				},
+				Kind: "category", Name: "cat",
+				Children: []hermes.HubNode{{
+					Kind: "channel", Name: "chan",
+					Children: []hermes.HubNode{
+						{Kind: "post", Name: "p2", SessionID: "s2", Profile: "debbie", LastActive: 20},
+						{Kind: "post", Name: "p1", SessionID: "s1", Profile: "default", LastActive: 10},
+					},
+				}},
 			}},
 		}},
 	}}
 	nodes := treeFromHub(sections)
-	if len(nodes) != 5 {
-		t.Fatalf("len = %d, want 5: %+v", len(nodes), nodes)
+	if len(nodes) != 6 {
+		t.Fatalf("len = %d, want 6: %+v", len(nodes), nodes)
 	}
-	wantKinds := []nodeKind{kindGuild, kindCategory, kindChannel, kindPost, kindPost}
-	wantDepths := []int{0, 1, 2, 3, 3}
+	wantKinds := []nodeKind{kindProfile, kindGuild, kindCategory, kindChannel, kindPost, kindPost}
+	wantDepths := []int{0, 1, 2, 3, 4, 4}
 	for i := range nodes {
 		if nodes[i].kind != wantKinds[i] || nodes[i].depth != wantDepths[i] {
 			t.Errorf("node %d = {kind:%v depth:%d}, want {%v %d}", i, nodes[i].kind, nodes[i].depth, wantKinds[i], wantDepths[i])
 		}
 	}
-	if nodes[3].sessionID != "s2" || nodes[4].sessionID != "s1" {
+	if nodes[4].sessionID != "s2" || nodes[5].sessionID != "s1" {
 		t.Errorf("post session ids not preserved: %+v", nodes)
+	}
+	if nodes[4].profile != "debbie" || nodes[5].profile != "default" {
+		t.Errorf("post profiles not preserved: %+v", nodes)
 	}
 }
 

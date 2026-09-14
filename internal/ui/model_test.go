@@ -40,7 +40,7 @@ func TestAssignCards_EmptyInputs(t *testing.T) {
 }
 
 func TestUnread(t *testing.T) {
-	m := Model{read: map[string]float64{"a": 100}}
+	m := Model{read: map[string]float64{"a": 100, "debbie~d1": 200}}
 	cases := []struct {
 		name string
 		node treeNode
@@ -51,6 +51,8 @@ func TestUnread(t *testing.T) {
 		{"read, newer activity", treeNode{kind: kindPost, sessionID: "a", lastActive: 102}, true},
 		{"no session", treeNode{kind: kindPost}, false},
 		{"no activity timestamp", treeNode{kind: kindPost, sessionID: "c"}, false},
+		{"profile-scoped read mark", treeNode{kind: kindPost, sessionID: "d1", profile: "debbie", lastActive: 200}, false},
+		{"profile-scoped, newer activity", treeNode{kind: kindPost, sessionID: "d1", profile: "debbie", lastActive: 205}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -58,6 +60,18 @@ func TestUnread(t *testing.T) {
 				t.Errorf("unread(%+v) = %v, want %v", c.node, got, c.want)
 			}
 		})
+	}
+}
+
+func TestReadKey(t *testing.T) {
+	if got := readKey("", "abc"); got != "abc" {
+		t.Errorf("default key = %q", got)
+	}
+	if got := readKey("default", "abc"); got != "abc" {
+		t.Errorf("explicit default key = %q", got)
+	}
+	if got := readKey("debbie", "abc"); got != "debbie~abc" {
+		t.Errorf("secondary key = %q", got)
 	}
 }
 

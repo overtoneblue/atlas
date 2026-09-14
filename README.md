@@ -8,10 +8,12 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.8.1 — hardening.** Feature set unchanged from 0.8.0 (live tree with
-unread dots, `x` kill switch, per-turn cards, native-parity Discord mirror);
-this release is structure: the UI package split into focused files, a unit
-test suite, shared config paths, and `make` entry points.
+Status: **0.9.0 — multi-profile.** The tree carries every Hermes profile as its
+own root (`◆ Nolan`, `◆ Debbie`), each keeping the Discord shape where it's
+bound (guild → categories → channels → threads) and source-grouped lists where
+it isn't. Opening, reading, sending, stopping, search, cards and the mirror all
+route through the right profile — sessions, read marks, and per-profile API
+keys are scoped. Feature set otherwise unchanged from 0.8.x.
 
 ## Mirror
 

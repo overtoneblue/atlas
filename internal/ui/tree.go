@@ -11,6 +11,7 @@ const (
 	kindCategory
 	kindChannel
 	kindPost
+	kindProfile
 )
 
 type treeNode struct {
@@ -18,6 +19,7 @@ type treeNode struct {
 	depth      int
 	kind       nodeKind
 	sessionID  string
+	profile    string
 	msgCount   int
 	lastActive float64
 }
@@ -64,6 +66,8 @@ func treeFromHub(sections []hermes.HubNode) []treeNode {
 	walk = func(n hermes.HubNode, depth int) {
 		var kind nodeKind
 		switch n.Kind {
+		case "profile":
+			kind = kindProfile
 		case "guild":
 			kind = kindGuild
 		case "category":
@@ -78,6 +82,7 @@ func treeFromHub(sections []hermes.HubNode) []treeNode {
 			depth:      depth,
 			kind:       kind,
 			sessionID:  n.SessionID,
+			profile:    n.Profile,
 			msgCount:   n.MessageCount,
 			lastActive: n.LastActive,
 		})

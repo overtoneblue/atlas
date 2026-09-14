@@ -35,4 +35,5 @@ var (
 	styleSep    = lipgloss.NewStyle().Foreground(colDim)
 	styleStatus = lipgloss.NewStyle().Background(lipgloss.Color("235")).Foreground(lipgloss.Color("250"))
 	styleInsert = lipgloss.NewStyle().Bold(true).Background(lipgloss.Color("60")).Foreground(colFgHi)
+	styleRoot   = lipgloss.NewStyle().Bold(true).Foreground(colMauve)
 )

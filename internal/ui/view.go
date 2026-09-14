@@ -37,7 +37,7 @@ func (m Model) RenderFrame(width, height int) string {
 
 	sep := strings.TrimSuffix(strings.Repeat(styleSep.Render("│")+"\n", contentH), "\n")
 
-	left := padBlock(strings.Join(m.renderTree(), "\n"), leftW, contentH)
+	left := padBlock(strings.Join(m.renderTree(contentH), "\n"), leftW, contentH)
 	midTop := padBlock(strings.Join(m.renderTranscript(midW, transcriptH), "\n"), midW, transcriptH)
 	mid := midTop + "\n" + m.renderInputBox(midW)
 
@@ -51,15 +51,18 @@ func (m Model) RenderFrame(width, height int) string {
 	return row + "\n" + m.renderStatus(width)
 }
 
-func (m Model) renderTree() []string {
-	lines := []string{
+func (m Model) renderTree(viewH int) []string {
+	head := []string{
 		styleTitle.Render(" WORKSTREAMS"),
 		styleDim.Render(" ───────────"),
 	}
+	var rows []string
 	for i, n := range m.tree {
 		indent := strings.Repeat("  ", min(n.depth, 3))
 		glyph := "· "
 		switch n.kind {
+		case kindProfile:
+			glyph = "◆ "
 		case kindGuild:
 			glyph = "≡ "
 		case kindCategory:
@@ -71,6 +74,8 @@ func (m Model) renderTree() []string {
 		label := truncLine(n.label, budget)
 		var styled string
 		switch n.kind {
+		case kindProfile:
+			styled = styleRoot.Render(label)
 		case kindGuild:
 			styled = styleTitle.Render(label)
 		case kindCategory:
@@ -88,26 +93,52 @@ func (m Model) renderTree() []string {
 		if n.kind == kindPost && m.unread(n) {
 			glyphStyled = styleGold.Render("● ")
 		}
-		lines = append(lines, mark+indent+glyphStyled+styled)
+		rows = append(rows, mark+indent+glyphStyled+styled)
 	}
-	lines = append(lines, "")
+	foot := []string{"", styleDim.Render(" ─────────────")}
 	posts := countPosts(m.tree)
 	if posts > 0 {
 		mid := styleDim.Render(fmt.Sprintf(" %d posts", posts))
 		if u := m.unreadCount(); u > 0 {
 			mid += styleDim.Render(" · ") + styleGold.Render(fmt.Sprintf("%d unread", u))
 		}
-		lines = append(lines,
-			styleDim.Render(" ─────────────"),
-			mid+styleDim.Render(" · ")+styleGreen.Render(m.modeLabel()),
-		)
+		foot = append(foot, mid+styleDim.Render(" · ")+styleGreen.Render(m.modeLabel()))
 	} else {
-		lines = append(lines,
-			styleDim.Render(" ─────────────"),
-			styleDim.Render(" 2 runs · ")+styleGreen.Render("3")+styleDim.Render(" unread"),
-		)
+		foot = append(foot, styleDim.Render(" 2 runs · ")+styleGreen.Render("3")+styleDim.Render(" unread"))
 	}
-	return lines
+
+	// Window the rows so the cursor is always visible (the tree outgrew one
+	// screen once profiles were added).
+	avail := viewH - len(head) - len(foot)
+	if avail < 3 {
+		avail = 3
+	}
+	start := 0
+	if len(rows) > avail {
+		start = clampInt(m.cursor-avail/2, 0, len(rows)-avail)
+	}
+	end := min(len(rows), start+avail)
+	vis := rows[start:end]
+
+	out := make([]string, 0, len(head)+len(vis)+len(foot))
+	out = append(out, head...)
+	out = append(out, vis...)
+	out = append(out, foot...)
+	return out
+}
+
+// assistantLabel is the display name of the open session's agent profile.
+func (m Model) assistantLabel() string { return assistantName(m.openProfile) }
+
+// assistantName maps a profile to its agent's display name (default = Nolan).
+func assistantName(profile string) string {
+	if profile == "" || profile == "default" {
+		return "Nolan"
+	}
+	if len(profile) == 1 {
+		return strings.ToUpper(profile)
+	}
+	return strings.ToUpper(profile[:1]) + profile[1:]
 }
 
 func (m Model) modeLabel() string {
@@ -178,7 +209,7 @@ func (m Model) transcriptLines(width int) ([]string, map[int]int) {
 	}
 	for _, msg := range msgs {
 		idx[msg.ID] = len(lines)
-		lines = append(lines, renderMessage(msg, width, m.expandAll)...)
+		lines = append(lines, renderMessage(msg, width, m.expandAll, m.assistantLabel())...)
 		if m.showCards && msg.Role == "assistant" {
 			if line, ok := m.cardLines[msg.ID]; ok {
 				for _, l := range wrapIndent(line, width, "  ", 3) {
@@ -193,7 +224,7 @@ func (m Model) transcriptLines(width int) ([]string, map[int]int) {
 		}
 	}
 	if m.streaming {
-		lines = append(lines, styleMauve.Render(" Nolan")+styleDim.Render(" · streaming"))
+		lines = append(lines, styleMauve.Render(" "+m.assistantLabel())+styleDim.Render(" · streaming"))
 		buf := cleanText(m.streamBuf)
 		if buf == "" {
 			buf = "…"
@@ -245,7 +276,7 @@ func helpLines(width int) []string {
 	}
 }
 
-func renderMessage(msg hermes.Message, width int, expand bool) []string {
+func renderMessage(msg hermes.Message, width int, expand bool, agentName string) []string {
 	userMax, asstMax, reasonMax := 6, 10, 3
 	if expand {
 		userMax, asstMax, reasonMax = 400, 600, 12
@@ -258,7 +289,7 @@ func renderMessage(msg hermes.Message, width int, expand bool) []string {
 		out = append(out, wrapIndent(cleanText(string(msg.Content)), width, "   ", userMax)...)
 		out = append(out, "")
 	case "assistant":
-		out = append(out, styleMauve.Render(" Nolan")+styleDim.Render(" · "+ts))
+		out = append(out, styleMauve.Render(" "+agentName)+styleDim.Render(" · "+ts))
 		if r := cleanText(string(msg.Reasoning)); r != "" {
 			for _, l := range wrapIndent("💭 "+r, width, "   ", reasonMax) {
 				out = append(out, styleFaint.Render(l))
@@ -418,6 +449,9 @@ func (m Model) renderRail() []string {
 			kv("active", relTime(m.openLast)),
 			kv("session", truncLine(m.openID, 13)),
 		)
+		if m.openProfile != "" && m.openProfile != "default" {
+			lines = append(lines, kv("profile", m.openProfile))
+		}
 		if m.totalFor == m.openID && m.sessTotal.Turns > 0 {
 			lines = append(lines, kv("spend", fmt.Sprintf("$%.4f · %dt", m.sessTotal.Cost, m.sessTotal.Turns)))
 		}
@@ -514,7 +548,7 @@ func (m Model) renderStatus(width int) string {
 	if m.searchMode {
 		foc = "search"
 	}
-	left := " " + mode + " · " + foc + " · atlas 0.8.1 · " + m.status
+	left := " " + mode + " · " + foc + " · atlas 0.9.0 · " + m.status
 	right := "? help"
 	if m.streaming {
 		right = "x stop · ? help"
