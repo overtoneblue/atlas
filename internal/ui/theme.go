@@ -115,6 +115,10 @@ var (
 	styleBadgeN lipgloss.Style // NORMAL mode badge
 	styleBadgeI lipgloss.Style // INSERT mode badge
 	styleBadgeS lipgloss.Style // STREAM mode badge
+	styleBadgeF lipgloss.Style // FIND mode badge
+	styleBadgeV lipgloss.Style // VISUAL mode badge
+	styleFind   lipgloss.Style // in-chat find hits (search highlight)
+	styleSel    lipgloss.Style // visual selection background
 
 	// legacy names kept for call sites that predate the token pass
 	styleGold, styleChan, stylePost, styleMauve, styleBlu, styleYel lipgloss.Style
@@ -148,15 +152,19 @@ func applyTheme(t Theme) {
 	styleBadgeN = lipgloss.NewStyle().Background(t.Dim).Foreground(t.Bg).Bold(true)
 	styleBadgeI = lipgloss.NewStyle().Background(t.Green).Foreground(t.Bg).Bold(true)
 	styleBadgeS = lipgloss.NewStyle().Background(t.Yellow).Foreground(t.Bg).Bold(true)
+	styleBadgeF = lipgloss.NewStyle().Background(t.Blue).Foreground(t.Bg).Bold(true)
+	styleBadgeV = lipgloss.NewStyle().Background(t.Purple).Foreground(t.Bg).Bold(true)
+	styleFind = lipgloss.NewStyle().Background(t.SelBg).Underline(true)
+	styleSel = lipgloss.NewStyle().Reverse(true)
 
 	// legacy aliases (semantic intent recorded in view.go comments)
-	styleGold = lipgloss.NewStyle().Foreground(t.Yellow)   // unread dots, cards
-	styleChan = lipgloss.NewStyle().Foreground(t.Fg)       // channel rows
-	stylePost = lipgloss.NewStyle().Foreground(t.Fg)       // post rows (read)
-	styleMauve = lipgloss.NewStyle().Foreground(t.Purple)  // assistant names (default profile)
-	styleBlu = lipgloss.NewStyle().Foreground(t.Cyan)      // the user
-	styleYel = lipgloss.NewStyle().Foreground(t.Yellow)    // cursor / hints
-	styleMag = lipgloss.NewStyle().Foreground(t.Purple)    // tool lines
-	styleSep = lipgloss.NewStyle().Foreground(t.Faint)     // separators
-	styleInsert = styleBadgeI                              // composer prompt (insert)
+	styleGold = lipgloss.NewStyle().Foreground(t.Yellow)  // unread dots, cards
+	styleChan = lipgloss.NewStyle().Foreground(t.Fg)      // channel rows
+	stylePost = lipgloss.NewStyle().Foreground(t.Fg)      // post rows (read)
+	styleMauve = lipgloss.NewStyle().Foreground(t.Purple) // assistant names (default profile)
+	styleBlu = lipgloss.NewStyle().Foreground(t.Cyan)     // the user
+	styleYel = lipgloss.NewStyle().Foreground(t.Yellow)   // cursor / hints
+	styleMag = lipgloss.NewStyle().Foreground(t.Purple)   // tool lines
+	styleSep = lipgloss.NewStyle().Foreground(t.Faint)    // separators
+	styleInsert = styleBadgeI                             // composer prompt (insert)
 }

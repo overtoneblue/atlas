@@ -60,6 +60,16 @@ type Model struct {
 	searchSel   int
 	searching   bool
 
+	// in-conversation vim nav: find, visual select, yank
+	findMode      bool
+	findQuery     string
+	findOrd       int
+	visMode       bool
+	visMsg        bool
+	visAnchor     int
+	visCursor     int
+	hideReasoning bool
+
 	// per-turn stats cards
 	showCards bool
 	turnCards []hermes.TurnCard
@@ -304,6 +314,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inserting {
 			return m.updateInsert(msg)
 		}
+		if m.findMode {
+			return m.updateFind(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			saveReadState(m.read)
@@ -315,11 +328,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?":
 			m.helpVisible = true
 		case "/":
-			m.searchMode = true
-			m.searchQuery = ""
-			m.searchHits = nil
-			m.searchSel = 0
-			m.status = "search — type a query, enter runs it"
+			if m.focus == 1 && m.openID != "" {
+				m.findMode = true
+				m.findQuery = ""
+				m.findOrd = 0
+				m.status = "find — type a query, enter jumps, n/N cycle"
+			} else {
+				m.searchMode = true
+				m.searchQuery = ""
+				m.searchHits = nil
+				m.searchSel = 0
+				m.status = "search — type a query, enter runs it"
+			}
 		case "e":
 			m.expandAll = !m.expandAll
 		case "1":
@@ -341,29 +361,104 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.status = "cards: latest only"
 			}
-		case "esc":
-			if m.streaming {
-				m.interrupt()
+		case "r":
+			m.hideReasoning = !m.hideReasoning
+			if m.hideReasoning {
+				m.status = "reasoning: hidden — r shows it"
 			} else {
+				m.status = "reasoning: visible"
+			}
+		case "n", "N":
+			if m.findQuery != "" {
+				dir := 1
+				if msg.String() == "N" {
+					dir = -1
+				}
+				m = m.findJump(dir)
+			}
+		case "{", "}":
+			m = m.msgJump(msg.String() == "}")
+		case "v":
+			m = m.visStart(false)
+		case "V":
+			m = m.visStart(true)
+		case "y":
+			if m.visMode {
+				var cmd tea.Cmd
+				m, cmd = m.visYank()
+				return m, cmd
+			}
+		case "Q":
+			if m.openID != "" {
+				m = m.quoteSelection()
+			}
+		case "ctrl+u":
+			if m.visMode {
+				m = m.visMove(-m.midViewport() / 2)
+			} else {
+				m.scroll += m.midViewport() / 2
+			}
+		case "ctrl+d":
+			if m.visMode {
+				m = m.visMove(m.midViewport() / 2)
+			} else {
+				m.scroll = clampInt(m.scroll-m.midViewport()/2, 0, 1<<30)
+			}
+		case "esc":
+			switch {
+			case m.visMode:
+				m.visMode = false
+				m.status = "normal"
+			case m.findQuery != "":
+				m.findQuery = ""
+				m.findOrd = 0
+				m.status = "find cleared"
+			case m.streaming:
+				m.interrupt()
+			default:
 				m.scroll = 0
 				m.status = "bottom"
 			}
 		case "j", "down":
-			m = m.moveDown()
+			if m.visMode {
+				m = m.visMove(1)
+			} else {
+				m = m.moveDown()
+			}
 		case "k", "up":
-			m = m.moveUp()
+			if m.visMode {
+				m = m.visMove(-1)
+			} else {
+				m = m.moveUp()
+			}
 		case "pgdown":
-			m.scroll = clampInt(m.scroll-10, 0, 1<<30)
+			if m.visMode {
+				m = m.visMove(m.midViewport())
+			} else {
+				m.scroll = clampInt(m.scroll-m.midViewport(), 0, 1<<30)
+			}
 		case "pgup":
-			m.scroll += 10
+			if m.visMode {
+				m = m.visMove(-m.midViewport())
+			} else {
+				m.scroll += m.midViewport()
+			}
 		case "g":
-			if m.focus == 1 {
+			if m.visMode {
+				m.visCursor = 0
+				m = m.visFollow()
+			} else if m.focus == 1 {
 				m.scroll = 1 << 30 // clamped at render
 			} else {
 				m.cursor = 0
 			}
 		case "G":
-			if m.focus == 1 {
+			if m.visMode {
+				if g := m.visGeo(); g.total > 0 {
+					m.visCursor = g.total - 1
+				}
+				m = m.visFollow()
+			} else if m.focus == 1 {
 				m.scroll = 0
 			} else if len(m.tree) > 0 {
 				m.cursor = len(m.tree) - 1
@@ -401,9 +496,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, r := range msg.Runes {
 				switch r {
 				case 'j':
-					m = m.moveDown()
+					if m.visMode {
+						m = m.visMove(1)
+					} else {
+						m = m.moveDown()
+					}
 				case 'k':
-					m = m.moveUp()
+					if m.visMode {
+						m = m.visMove(-1)
+					} else {
+						m = m.moveUp()
+					}
 				}
 			}
 		}
@@ -629,6 +732,8 @@ func (m *Model) open(n treeNode) tea.Cmd {
 	m.markRead(n.profile, n.sessionID)
 	m.messages = nil
 	m.scroll = 0
+	m.findMode, m.findQuery, m.findOrd = false, "", 0
+	m.visMode, m.visMsg = false, false
 	m.lastCard = ""
 	m.cardFor = ""
 	m.cardLines = nil

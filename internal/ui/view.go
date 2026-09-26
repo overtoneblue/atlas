@@ -194,7 +194,35 @@ func (m Model) renderTranscript(width, height int) []string {
 	if end > len(full) {
 		end = len(full)
 	}
-	return append([]string{}, full[start:end]...)
+	visible := append([]string{}, full[start:end]...)
+	// in-conversation find / visual highlights (live transcript only)
+	if m.openID != "" && !m.helpVisible && !m.searchMode {
+		if q := strings.TrimSpace(m.findQuery); q != "" {
+			seq := sgrPrefix(styleFind)
+			for _, abs := range findMatches(full, q) {
+				if abs >= start && abs < end {
+					visible[abs-start] = rearm(visible[abs-start], seq)
+				}
+			}
+		}
+		if m.visMode {
+			g := m.visGeo()
+			lo, hi := g.span(m.visAnchor, m.visCursor, m.visMsg)
+			seq := sgrPrefix(styleSel)
+			for abs := lo; abs <= hi; abs++ {
+				if abs >= start && abs < end {
+					i := abs - start
+					l := visible[i]
+					// pad to full width so the band reads as one block
+					if pad := width - ansi.StringWidth(stripANSI(l)); pad > 0 {
+						l += strings.Repeat(" ", pad)
+					}
+					visible[i] = rearm(l, seq)
+				}
+			}
+		}
+	}
+	return visible
 }
 
 func (m Model) liveTranscript(width int) []string {
@@ -231,7 +259,7 @@ func (m Model) transcriptLines(width int) ([]string, map[int]int) {
 		if m.openProfile != "" && m.openProfile != "default" {
 			nameStyle = stylePurple
 		}
-		lines = append(lines, renderMessage(msg, width, m.expandAll, m.assistantLabel(), nameStyle)...)
+		lines = append(lines, renderMessage(msg, width, m.expandAll, m.hideReasoning, m.assistantLabel(), nameStyle)...)
 		if m.showCards && msg.Role == "assistant" {
 			if line, ok := m.cardLines[msg.ID]; ok {
 				for _, l := range wrapIndent(line, width, "  ", 3) {
@@ -288,12 +316,18 @@ func helpLines(width int) []string {
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "g / G")) + " first / last · top / bottom",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "pgup/dn")) + " scroll a screenful",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " open the selected post",
-		"  " + styleYel.Render(fmt.Sprintf("%-9s", "/")) + " search all sessions (enter → jump)",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "/")) + " search (tree) · find inside the chat",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "n / N")) + " next / previous find hit",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "{ / }")) + " jump between messages",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "v / V")) + " visual select: lines / messages",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "y / Q")) + " yank to clipboard · quote to composer",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "ctrl+u/d")) + " half page up / down",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "e")) + " expand long messages",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "r")) + " show / hide reasoning",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "c")) + " per-turn stat cards (all ⇄ latest)",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "i")) + " insert mode — write a message",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " send it (while in insert mode)",
-		"  " + styleYel.Render(fmt.Sprintf("%-9s", "esc")) + " leave insert · detach · back to bottom",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "esc")) + " cancel visual / find · detach · bottom",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "x")) + " stop the running turn",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "R")) + " refresh now (tree auto-refreshes)",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "?")) + " this panel",
@@ -304,7 +338,7 @@ func helpLines(width int) []string {
 	}
 }
 
-func renderMessage(msg hermes.Message, width int, expand bool, agentName string, nameStyle lipgloss.Style) []string {
+func renderMessage(msg hermes.Message, width int, expand, hideReasoning bool, agentName string, nameStyle lipgloss.Style) []string {
 	userMax, asstMax, reasonMax := 6, 10, 3
 	if expand {
 		userMax, asstMax, reasonMax = 400, 600, 12
@@ -323,7 +357,7 @@ func renderMessage(msg hermes.Message, width int, expand bool, agentName string,
 		out = append(out, "")
 	case "assistant":
 		out = append(out, nameStyle.Render(" "+agentName)+styleDim.Render(" · "+ts))
-		if r := cleanText(string(msg.Reasoning)); r != "" {
+		if r := cleanText(string(msg.Reasoning)); r != "" && !hideReasoning {
 			for _, l := range wrapIndent("💭 "+r, width, "   ", reasonMax) {
 				out = append(out, styleFaint.Render(l))
 			}
@@ -629,6 +663,12 @@ func (m Model) renderStatus(width int) string {
 	if m.streaming {
 		mode, badge = "STREAM", styleBadgeS
 	}
+	if m.findMode {
+		mode, badge = "FIND", styleBadgeF
+	}
+	if m.visMode {
+		mode, badge = "VISUAL", styleBadgeV
+	}
 	foc := "tree"
 	if m.focus == 1 {
 		foc = "transcript"
@@ -639,9 +679,12 @@ func (m Model) renderStatus(width int) string {
 	if m.searchMode {
 		foc = "search"
 	}
+	if m.findMode {
+		foc = "find"
+	}
 	left := " " + badge.Render(" "+mode+" ") +
 		styleDim.Render(" · "+foc+" · ") +
-		styleFaint.Render("atlas 0.10.1") +
+		styleFaint.Render("atlas 0.11.0") +
 		styleDim.Render(" · "+m.status)
 	right := "? help"
 	if m.streaming {
@@ -649,6 +692,16 @@ func (m Model) renderStatus(width int) string {
 	}
 	if m.hideTree || m.hideRail {
 		right = "1/2/z panes · " + right
+	}
+	if m.findMode {
+		right = "find: " + truncLine(m.findQuery, 28) + "▍"
+	} else if q := strings.TrimSpace(m.findQuery); q != "" && m.openID != "" && !m.helpVisible {
+		lines, _ := m.transcriptLines(m.midWidth())
+		if n := len(findMatches(lines, q)); n == 0 {
+			right = "find: no matches · esc clears"
+		} else {
+			right = fmt.Sprintf("find %d/%d · n/N · esc", clampInt(m.findOrd, 1, n), n)
+		}
 	}
 	lw, rw := ansi.StringWidth(left), ansi.StringWidth(right)
 	gap := width - lw - rw - 1

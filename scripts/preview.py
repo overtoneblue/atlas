@@ -57,11 +57,11 @@ def c256(n):
 
 
 def parse_line(line):
-    runs, i, fg, bg, bold = [], 0, DEFAULT_FG, DEFAULT_BG, False
+    runs, i, fg, bg, bold, rev = [], 0, DEFAULT_FG, DEFAULT_BG, False, False
 
     def flush(s):
         if s:
-            runs.append((s, fg, bg, bold))
+            runs.append((s, fg, bg, bold, rev))
 
     buf = []
     while i < len(line):
@@ -79,11 +79,15 @@ def parse_line(line):
             while j < len(ps):
                 p = ps[j]
                 if p == 0:
-                    fg, bg, bold = DEFAULT_FG, DEFAULT_BG, False
+                    fg, bg, bold, rev = DEFAULT_FG, DEFAULT_BG, False, False
                 elif p == 1:
                     bold = True
+                elif p == 7:
+                    rev = True
                 elif p == 22:
                     bold = False
+                elif p == 27:
+                    rev = False
                 elif p == 39:
                     fg = DEFAULT_FG
                 elif p == 49:
@@ -145,7 +149,7 @@ def main():
     cw = freg.getlength("X")
     lh = int(size * 1.4)
 
-    vis = [sum(len(s) for s, _, _, _ in parse_line(l)) for l in lines]
+    vis = [sum(len(s) for s, _, _, _, _ in parse_line(l)) for l in lines]
     w = int(max(vis, default=0) * cw) + 10
     h = len(lines) * lh + 6
     img = Image.new("RGB", (w, h), DEFAULT_BG)
@@ -154,7 +158,9 @@ def main():
     for ln, line in enumerate(lines):
         x = 2
         y = ln * lh + 2
-        for s, fg, bg, bold in parse_line(line):
+        for s, fg, bg, bold, rev in parse_line(line):
+            if rev:  # swap fg/bg the way a terminal renders SGR 7
+                fg, bg = (bg if bg != DEFAULT_BG else (0, 0, 0)), (fg if fg != DEFAULT_FG else DEFAULT_FG)
             if bg != DEFAULT_BG:
                 d.rectangle([x - 0.5, y - 1, x + cw * len(s) + cw, y + lh - 2], fill=bg)
             fmain = fbold if bold else freg

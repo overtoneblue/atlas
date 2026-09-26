@@ -8,15 +8,15 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.10.1 — the visual overhaul.** Atlas styles through the terminal's
-16 ANSI palette by default, so it inherits the surrounding theme (stylix and
-base16 schemes included) instead of fighting it. Tree rows gained guide lines
-and a selection highlight, user messages carry an accent bar, each profile's
-agent gets its own name color, the composer shows the conversation title in
-its border, and the status bar has proper mode badges. `1`/`2` toggle the
-tree and rail panes, `z` is focus mode. `--theme house` pins Atlas's original
-warm palette for unthemed terminals. Feature set unchanged
-from 0.9.x.
+Status: **0.11.0 — vim in the chat.** The transcript is a proper vim
+playground now: `v` selects lines, `V` selects whole messages (reverse-video
+block, tmux-style), `y` yanks to the system clipboard over OSC 52 — raw
+markdown for message selections — and `Q` quotes a message into the composer.
+`/` inside the chat finds text in the conversation (`n`/`N` cycle, hits get a
+highlight band), `{`/`}` jump message to message, `ctrl+u`/`ctrl+d` and
+`pgup`/`pgdn` are real page motions, and `r` toggles reasoning visibility.
+Builds on 0.10.x (ANSI-palette theming, pane toggles `1`/`2`/`z`) and the
+0.9 multi-profile tree.
 
 ## Mirror
 
@@ -74,13 +74,20 @@ Without a key it falls back to demo data.
 | `1` / `2` | toggle the tree (left) / rail (right) pane |
 | `z` | focus mode — both panes away; `z` restores what was visible |
 | `g` / `G` | first / last row · scroll top / bottom |
-| `pgup` / `pgdn` | scroll a screenful |
+| `pgup` / `pgdn` | scroll a screenful (a real page now) |
+| `ctrl+u` / `ctrl+d` | half page up / down |
 | `enter` | open the selected post |
-| `/` | full-text search all sessions — `enter` to jump to a hit |
+| `/` | search all sessions (tree) · find inside the chat (transcript) |
+| `n` / `N` | next / previous find hit (after `/` in the chat) |
+| `{` / `}` | jump to the previous / next message |
+| `v` / `V` | visual select: lines / whole messages |
+| `y` | yank the selection to the clipboard (OSC 52; raw markdown for `V`) |
+| `Q` | quote the message (or selection) into the composer |
 | `e` | expand / collapse long messages |
+| `r` | show / hide reasoning |
 | `i` | insert mode — write a message |
 | `enter` (insert) | send it — runs a turn, streams the reply |
-| `esc` | leave insert · detach a running stream · back to bottom |
+| `esc` | leave insert · cancel visual / find · detach · back to bottom |
 | `x` | stop the running turn (while streaming) |
 | `R` | refresh now — the tree also auto-refreshes every 10s |
 | `?` | full keymap panel |
