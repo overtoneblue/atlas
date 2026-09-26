@@ -53,11 +53,13 @@ func (m Model) renderTree(viewH int) []string {
 	}
 	var rows []string
 	cursorRow := 0
-	for i, n := range m.tree {
-		if n.kind == kindProfile && i > 0 {
+	vis := m.visibleRows()
+	for _, ti := range vis {
+		n := m.tree[ti]
+		if n.kind == kindProfile && len(rows) > 0 {
 			rows = append(rows, "") // breathing room between profile sections
 		}
-		selected := i == m.cursor
+		selected := ti == m.cursor
 		if selected {
 			cursorRow = len(rows)
 		}
@@ -86,6 +88,9 @@ func (m Model) renderTree(viewH int) []string {
 			lstyle = styleFgHi
 		case kindCategory:
 			glyph, gstyle = "▾ ", styleDim
+			if n.collapsed {
+				glyph = "▸ "
+			}
 			lstyle = styleYellow
 		case kindChannel:
 			glyph, gstyle = "# ", styleFaint
@@ -98,8 +103,23 @@ func (m Model) renderTree(viewH int) []string {
 				lstyle = stylePost
 			}
 		}
-		plain := mark + n.guide + glyph + n.label
-		budget := 30 - 1 - ansi.StringWidth(n.guide) - ansi.StringWidth(glyph) - 1
+		// right-edge tail: age for posts, fold marker for containers
+		tail := ""
+		switch {
+		case n.kind == kindPost:
+			tail = ageTag(n.lastActive)
+		case n.kind != kindCategory && m.hasKids(ti):
+			if n.collapsed {
+				tail = "▸"
+			} else {
+				tail = "▾"
+			}
+		}
+		tailW := 0
+		if tail != "" {
+			tailW = ansi.StringWidth(tail) + 1
+		}
+		budget := 30 - 1 - ansi.StringWidth(n.guide) - ansi.StringWidth(glyph) - 1 - tailW
 		if budget < 6 {
 			budget = 6
 		}
@@ -108,8 +128,11 @@ func (m Model) renderTree(viewH int) []string {
 			paint(styleFaint, n.guide) +
 			paint(gstyle, glyph) +
 			paint(lstyle, label)
-		if pad := 30 - ansi.StringWidth(plain); pad > 0 {
+		if pad := 30 - tailW - ansi.StringWidth(seg); pad > 0 {
 			seg += paint(lipgloss.NewStyle(), strings.Repeat(" ", pad))
+		}
+		if tail != "" {
+			seg += paint(styleFaint, " "+tail)
 		}
 		rows = append(rows, seg)
 	}
@@ -117,11 +140,20 @@ func (m Model) renderTree(viewH int) []string {
 	foot := []string{"", styleFaint.Render(" ─────────────")}
 	posts := countPosts(m.tree)
 	if posts > 0 {
-		mid := styleDim.Render(fmt.Sprintf(" %d posts", posts))
+		hidden := m.hiddenStaleCount()
+		var mid string
+		if hidden > 0 {
+			mid = styleDim.Render(fmt.Sprintf(" %d/%d posts", posts-hidden, posts))
+		} else {
+			mid = styleDim.Render(fmt.Sprintf(" %d posts", posts))
+		}
 		if u := m.unreadCount(); u > 0 {
 			mid += styleDim.Render(" · ") + styleGold.Render(fmt.Sprintf("%d unread", u))
 		}
-		foot = append(foot, mid+styleDim.Render(" · ")+styleGreen.Render(m.modeLabel()))
+		if hidden == 0 {
+			mid += styleDim.Render(" · ") + styleGreen.Render(m.modeLabel())
+		}
+		foot = append(foot, mid)
 	} else {
 		foot = append(foot, styleDim.Render(" 2 runs · ")+styleGreen.Render("3")+styleDim.Render(" unread"))
 	}
@@ -314,8 +346,9 @@ func helpLines(width int) []string {
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "1 / 2")) + " toggle the tree / rail pane",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "z")) + " focus mode — panes away, z restores",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "g / G")) + " first / last · top / bottom",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", ". / ,")) + " hide / show chats idle 7+ days",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "pgup/dn")) + " scroll a screenful",
-		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " open the selected post",
+		"  " + styleYel.Render(fmt.Sprintf("%-9s", "enter")) + " open a post · fold / unfold a section",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "/")) + " search (tree) · find inside the chat",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "n / N")) + " next / previous find hit",
 		"  " + styleYel.Render(fmt.Sprintf("%-9s", "{ / }")) + " jump between messages",
@@ -684,7 +717,7 @@ func (m Model) renderStatus(width int) string {
 	}
 	left := " " + badge.Render(" "+mode+" ") +
 		styleDim.Render(" · "+foc+" · ") +
-		styleFaint.Render("atlas 0.11.0") +
+		styleFaint.Render("atlas 0.12.0") +
 		styleDim.Render(" · "+m.status)
 	right := "? help"
 	if m.streaming {
@@ -729,6 +762,29 @@ func padBlock(block string, width, height int) string {
 }
 
 // ---- text helpers ----
+
+// ageTag is the compact right-edge age on post rows ("4h", "3d", "2w").
+func ageTag(ts float64) string {
+	if ts <= 0 {
+		return ""
+	}
+	d := time.Since(time.Unix(int64(ts), 0))
+	days := int(d.Hours() / 24)
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", days)
+	case d < 60*24*time.Hour:
+		return fmt.Sprintf("%dw", days/7)
+	default:
+		return fmt.Sprintf("%dmo", days/30)
+	}
+}
 
 func hmTime(ts float64) string {
 	if ts <= 0 {

@@ -17,6 +17,8 @@ type Model struct {
 	focus         int // 0 = tree, 1 = transcript, 2 = composer
 	cursor        int
 	tree          []treeNode
+	hideStale     bool            // fold away conversations idle 7+ days (on by default)
+	foldedKeys    map[string]bool // fold state by stable path key — survives refreshes
 	status        string
 
 	client   *hermes.Client
@@ -89,7 +91,7 @@ type Model struct {
 func New() Model {
 	c := hermes.NewFromEnv()
 	h := hermes.NewHubFromEnv()
-	m := Model{client: c, hub: h, focus: 0, read: loadReadState()}
+	m := Model{client: c, hub: h, focus: 0, read: loadReadState(), hideStale: true}
 	if !c.Configured() {
 		m.tree = demoTree()
 		m.status = "demo data · set ATLAS_API_KEY for live (0.3.0)"
@@ -153,7 +155,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !m.hub.Configured() {
 			if len(m.sessions) > 0 {
-				m.tree = treeFromSessions(m.sessions)
+				m.tree = m.applyCollapse(treeFromSessions(m.sessions))
+				m = m.clampCursor()
 				m.status = fmt.Sprintf("live · %d sessions", len(m.sessions))
 			}
 			if cmd := m.autoOpen(); cmd != nil {
@@ -164,7 +167,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.status = "hub unreachable — flat list"
 			if len(m.sessions) > 0 {
-				m.tree = treeFromSessions(m.sessions)
+				m.tree = m.applyCollapse(treeFromSessions(m.sessions))
 			} else if len(m.tree) == 0 {
 				m.tree = demoTree()
 			}
@@ -172,7 +175,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 		} else {
-			m.tree = treeFromHub(msg.tree.Sections)
+			m.tree = m.applyCollapse(treeFromHub(msg.tree.Sections))
+			m = m.clampCursor()
 			m.status = fmt.Sprintf("live · hub · %d posts", countPosts(m.tree))
 			if cmd := m.autoOpen(); cmd != nil {
 				return m, cmd
@@ -368,6 +372,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.status = "reasoning: visible"
 			}
+		case ".", ",":
+			m.hideStale = !m.hideStale
+			if m.hideStale {
+				m.status = fmt.Sprintf("hiding %d chats idle 7d+ — . shows them", m.hiddenStaleCount())
+			} else {
+				m.status = "showing all chats — . hides the 7d+ idle"
+			}
+			m = m.clampCursor()
 		case "n", "N":
 			if m.findQuery != "" {
 				dir := 1
@@ -490,6 +502,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd := m.openSelection(); cmd != nil {
 				return m, cmd
 			}
+			m = m.toggleCollapse()
 		default:
 			// Burst input (fast repeats, pastes) arrives as one multi-rune
 			// KeyMsg; apply per-rune movement so kkkk / jjjj all land.
@@ -521,8 +534,13 @@ func (m Model) moveDown() Model {
 		}
 		return m
 	}
-	if m.cursor < len(m.tree)-1 {
-		m.cursor++
+	rows := m.visibleRows()
+	pos := treePos(rows, m.cursor)
+	if pos < 0 {
+		return m.clampCursor()
+	}
+	if pos < len(rows)-1 {
+		m.cursor = rows[pos+1]
 	}
 	return m
 }
@@ -532,8 +550,13 @@ func (m Model) moveUp() Model {
 		m.scroll++
 		return m
 	}
-	if m.cursor > 0 {
-		m.cursor--
+	rows := m.visibleRows()
+	pos := treePos(rows, m.cursor)
+	if pos < 0 {
+		return m.clampCursor()
+	}
+	if pos > 0 {
+		m.cursor = rows[pos-1]
 	}
 	return m
 }
@@ -710,13 +733,13 @@ func (m *Model) interrupt() {
 
 // ---- unread / read-state ----
 
-// autoOpen opens the first post in the tree when nothing is open yet.
+// autoOpen opens the first visible post in the tree when nothing is open yet.
 func (m *Model) autoOpen() tea.Cmd {
 	if m.openID != "" || !m.client.Configured() {
 		return nil
 	}
-	for _, n := range m.tree {
-		if n.kind == kindPost && n.sessionID != "" {
+	for _, i := range m.visibleRows() {
+		if n := m.tree[i]; n.kind == kindPost && n.sessionID != "" {
 			return m.open(n)
 		}
 	}
@@ -747,6 +770,49 @@ func (m *Model) open(n treeNode) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// applyCollapse restores fold state onto a freshly built tree. Fold keys are
+// stable paths, so folds survive the periodic hub refresh.
+func (m Model) applyCollapse(tree []treeNode) []treeNode {
+	for i := range tree {
+		if tree[i].key != "" && m.foldedKeys[tree[i].key] {
+			tree[i].collapsed = true
+		}
+	}
+	return tree
+}
+
+// toggleCollapse folds or unfolds the tree node under the cursor.
+func (m Model) toggleCollapse() Model {
+	if m.cursor < 0 || m.cursor >= len(m.tree) {
+		return m
+	}
+	n := m.tree[m.cursor]
+	if n.kind == kindPost {
+		return m // posts open, not fold
+	}
+	if !m.hasKids(m.cursor) {
+		m.status = "nothing to fold here"
+		return m
+	}
+	m.tree[m.cursor].collapsed = !n.collapsed
+	if m.tree[m.cursor].collapsed {
+		if n.key != "" {
+			if m.foldedKeys == nil {
+				m.foldedKeys = map[string]bool{}
+			}
+			m.foldedKeys[n.key] = true
+		}
+	} else {
+		delete(m.foldedKeys, n.key)
+	}
+	if m.tree[m.cursor].collapsed {
+		m.status = "folded " + truncLine(n.label, 24)
+	} else {
+		m.status = "unfolded " + truncLine(n.label, 24)
+	}
+	return m
+}
+
 // openSelection maps the tree cursor to a session when it's on a post row.
 func (m *Model) openSelection() tea.Cmd {
 	if m.cursor < 0 || m.cursor >= len(m.tree) {
@@ -770,14 +836,15 @@ func (m Model) LoadSync() Model {
 	}
 	if m.hub.Configured() {
 		if t, err := m.hub.FetchTree(ctx); err == nil {
-			m.tree = treeFromHub(t.Sections)
+			m.tree = m.applyCollapse(treeFromHub(t.Sections))
+			m = m.clampCursor()
 			m.status = fmt.Sprintf("live · hub · %d posts", countPosts(m.tree))
 		} else {
 			m.status = "hub unreachable: " + err.Error()
 		}
 	}
 	if len(m.tree) == 0 && len(m.sessions) > 0 {
-		m.tree = treeFromSessions(m.sessions)
+		m.tree = m.applyCollapse(treeFromSessions(m.sessions))
 		m.status = fmt.Sprintf("live · %d sessions", len(m.sessions))
 	}
 	if m.openID != "" {

@@ -8,15 +8,13 @@ same conversations); atlas is what you live in at the desk.
 > posts → conversations (sessions)**. Same objects, rendered as a fast,
 > vim-navigable TUI.
 
-Status: **0.11.0 — vim in the chat.** The transcript is a proper vim
-playground now: `v` selects lines, `V` selects whole messages (reverse-video
-block, tmux-style), `y` yanks to the system clipboard over OSC 52 — raw
-markdown for message selections — and `Q` quotes a message into the composer.
-`/` inside the chat finds text in the conversation (`n`/`N` cycle, hits get a
-highlight band), `{`/`}` jump message to message, `ctrl+u`/`ctrl+d` and
-`pgup`/`pgdn` are real page motions, and `r` toggles reasoning visibility.
-Builds on 0.10.x (ANSI-palette theming, pane toggles `1`/`2`/`z`) and the
-0.9 multi-profile tree.
+Status: **0.12.0 — a tree that stays clean.** Conversations idle 7+ days are
+stowed away by default — a Discord-style shelf life without touching Discord —
+and every section folds with `enter`, so a long-lived tree stays readable.
+Post rows gained right-edge age tags ("3h", "2d", "1w"), non-Discord sources
+read as names not slugs (CLI, API, Cron…), and the footer shows visible/total
+counts while things are stowed. Folds survive the periodic refresh. Builds on
+0.11 (vim-in-the-chat) and 0.10 (theming, panes).
 
 ## Mirror
 
@@ -76,7 +74,8 @@ Without a key it falls back to demo data.
 | `g` / `G` | first / last row · scroll top / bottom |
 | `pgup` / `pgdn` | scroll a screenful (a real page now) |
 | `ctrl+u` / `ctrl+d` | half page up / down |
-| `enter` | open the selected post |
+| `enter` | open a post · fold / unfold a section |
+| `.` / `,` | hide / show conversations idle 7+ days |
 | `/` | search all sessions (tree) · find inside the chat (transcript) |
 | `n` / `N` | next / previous find hit (after `/` in the chat) |
 | `{` / `}` | jump to the previous / next message |

@@ -60,6 +60,16 @@ AUTH = os.environ.get("API_SERVER_KEY") or ENV.get("API_SERVER_KEY", "")
 PORT = int(os.environ.get("ATLAS_HUB_PORT", "8643"))
 CACHE_TTL = float(os.environ.get("ATLAS_HUB_CACHE", "300"))
 
+# Friendlier channel names for non-discord session sources in the tree.
+SOURCE_LABELS = {
+    "cli": "CLI",
+    "api_server": "API",
+    "cron": "Cron",
+    "telegram": "Telegram",
+    "matrix": "Matrix",
+    "webhook": "Webhook",
+}
+
 
 def discover_profiles():
     """Profile registry: the hermes home (default) + every profiles/<name>/.
@@ -272,7 +282,7 @@ def build_profile_section(prof, errors):
         for r in other_rows:
             by_source.setdefault(r["source"], []).append(post_node(r, prof))
         chan_nodes = [
-            {"kind": "channel", "name": src, "children": sorted(posts, key=lambda p: -p["last_active"])}
+            {"kind": "channel", "name": SOURCE_LABELS.get(src, src), "children": sorted(posts, key=lambda p: -p["last_active"])}
             for src, posts in sorted(by_source.items())
         ]
         children.append({"kind": "category", "name": "Other sessions", "children": chan_nodes})

@@ -18,7 +18,7 @@
       packages = forAllSystems (system: {
         default = nixpkgs.legacyPackages.${system}.buildGoModule {
           pname = "atlas";
-          version = "0.11.0";
+          version = "0.12.0";
           src = ./.;
 
           vendorHash = "sha256-uwBJAqN4sIepiiJf9lCDumLqfKJEowQO2tOiSWD3Fig=";
