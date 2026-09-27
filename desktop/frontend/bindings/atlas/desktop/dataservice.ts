@@ -44,13 +44,37 @@ export function GetTree(): $CancellablePromise<hermes$0.HubTree | null> {
 }
 
 /**
- * SendMessage runs one full agent turn (blocking until the run completes).
- * Streaming deltas come later; M1 keeps the turn synchronous.
+ * InitialSession is read by the frontend during boot.
+ */
+export function InitialSession(): $CancellablePromise<string> {
+    return $Call.ByID(1803504045);
+}
+
+/**
+ * SendMessage starts one agent turn asynchronously. Deltas and lifecycle
+ * updates stream back on the "atlas:turn" event as they arrive; the call
+ * returns immediately.
  */
 export function SendMessage(profile: string, sessionID: string, text: string): $CancellablePromise<void> {
     return $Call.ByID(439076974, profile, sessionID, text);
 }
 
+/**
+ * SetInitialSession wires the --open flag: boot straight into one session.
+ */
+export function SetInitialSession(id: string): $CancellablePromise<void> {
+    return $Call.ByID(3296726963, id);
+}
+
 export function Status(): $CancellablePromise<$models.Status> {
     return $Call.ByID(1095129455);
+}
+
+/**
+ * StopTurn asks the API server to interrupt the session's in-flight run.
+ * If the run id has not arrived yet, it waits briefly for it; failing that
+ * it detaches the local stream (the run may finish server-side).
+ */
+export function StopTurn(sessionID: string): $CancellablePromise<void> {
+    return $Call.ByID(3606818042, sessionID);
 }

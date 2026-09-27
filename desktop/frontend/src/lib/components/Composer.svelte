@@ -27,8 +27,14 @@
     rows="1"
     spellcheck="false"
     placeholder={s.open
-      ? "message…   enter sends · shift+enter newline · esc normal"
+      ? s.turnBusy[s.open.id]
+        ? "streaming…   ctrl+c stops the turn"
+        : "message…   enter sends · shift+enter newline · esc normal"
       : "open a workstream to chat"}
   ></textarea>
-  <button onclick={() => void actions.send()} title="send">⏎</button>
+  {#if s.open && s.turnBusy[s.open.id]}
+    <button class="stop" onclick={() => void actions.stopTurn()} title="stop turn (ctrl+c)">⏹</button>
+  {:else}
+    <button onclick={() => void actions.send()} title="send (enter)">⏎</button>
+  {/if}
 </div>

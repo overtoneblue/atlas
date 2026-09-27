@@ -1,8 +1,18 @@
 // Central app state — Svelte 5 runes. ALL mutations flow through `actions`;
 // components only read `s` and call actions. Ports the TUI's behaviors:
-// stale-stows, folds, auto-open-first-post, unread tracking, vim focus model.
+// stale-stows, folds, unread tracking, vim focus model — plus the v2 live
+// turn machine (streamed deltas + tool activity, stop support).
 
-import type { Focus, HubNode, Message, Row, Session, Status } from "./types";
+import type {
+  Focus,
+  HubNode,
+  LiveTurn,
+  Message,
+  Row,
+  Session,
+  Status,
+  TurnEvent,
+} from "./types";
 import * as api from "./api";
 import { buildRows, buildSessionRows } from "./tree";
 
@@ -30,6 +40,8 @@ export const s = $state({
   open: null as { profile: string; id: string; title: string } | null,
   messages: [] as Message[],
   loadingOpen: false,
+  live: null as LiveTurn | null, // the streaming turn for the open session
+  turnBusy: {} as Record<string, boolean>, // sessionID -> turn in flight
   focus: "tree" as Focus,
   mode: "NORMAL" as "NORMAL" | "INSERT",
   statusText: "starting…",
@@ -68,6 +80,26 @@ export const actions = {
       s.status = null;
     }
     await this.refreshTree(true);
+
+    // Open target: --open session when present, else the first visible post.
+    let target: HubNode | null = null;
+    try {
+      const want = await api.InitialSession();
+      if (want) {
+        const row = s.rows.find((r) => r.node.session_id === want);
+        if (row) target = row.node;
+      }
+    } catch {
+      /* binding missing or unset */
+    }
+    if (!target) {
+      target = s.rows.find((r) => r.node.kind === "post" && r.node.session_id)?.node ?? null;
+    }
+    if (target) {
+      void this.openPost(target);
+      const idx = s.rows.findIndex((r) => r.node.session_id === target!.session_id);
+      if (idx >= 0) s.cursor = idx;
+    }
   },
 
   async refreshTree(initial = false) {
@@ -90,14 +122,6 @@ export const actions = {
       }
     }
     this.rebuild(initial);
-    if (initial) {
-      const first = s.rows.find((r) => r.node.kind === "post" && r.node.session_id);
-      if (first) {
-        void this.openPost(first.node);
-        const idx = s.rows.findIndex((r) => r.key === first.key);
-        if (idx >= 0) s.cursor = idx;
-      }
-    }
   },
 
   rebuild(initial = false) {
@@ -206,29 +230,137 @@ export const actions = {
     }
   },
 
+  async refreshTranscript() {
+    const open = s.open;
+    if (!open) return;
+    try {
+      const msgs = await api.GetMessages(open.profile, open.id, 400);
+      if (s.open?.id !== open.id) return;
+      s.messages = cleanMessages(msgs);
+      s.autoScroll += 1;
+    } catch {
+      /* keep the current transcript on refresh failure */
+    }
+  },
+
+  // ---- live turns ------------------------------------------------------
+
+  // send echoes the user message locally, then fires the turn; deltas and
+  // lifecycle arrive on "atlas:turn" events.
   async send() {
     if (!s.open) return;
+    if (s.turnBusy[s.open.id]) {
+      s.statusText = "a turn is already running — ctrl+c stops it";
+      return;
+    }
     const text = s.draft.trim();
     if (!text) return;
     const open = s.open;
+    const echoID = -Date.now();
     s.draft = "";
-    s.statusText = "sending…";
+    s.messages = s.messages.concat([
+      {
+        id: echoID,
+        role: "user",
+        content: text,
+        tool_name: "",
+        reasoning: "",
+        timestamp: Date.now() / 1000,
+      },
+    ]);
+    s.autoScroll += 1;
     try {
       await api.SendMessage(open.profile, open.id, text);
-      s.statusText = "turn complete";
+      s.statusText = "streaming…";
     } catch (e: unknown) {
-      s.statusText = "send failed: " + errText(e);
+      s.messages = s.messages.filter((m) => m.id !== echoID);
       s.draft = text;
+      s.statusText = "send failed: " + errText(e);
     }
+  },
+
+  async stopTurn() {
+    if (!s.open || !s.turnBusy[s.open.id]) return;
+    s.statusText = "stopping…";
     try {
-      const msgs = await api.GetMessages(open.profile, open.id, 400);
-      if (s.open?.id === open.id) {
-        s.messages = cleanMessages(msgs);
-        s.autoScroll += 1;
-      }
-    } catch {
-      /* keep current transcript on refresh failure */
+      await api.StopTurn(s.open.id);
+    } catch (e: unknown) {
+      s.statusText = "stop failed: " + errText(e);
     }
+  },
+
+  // handleTurnEvent folds one "atlas:turn" event into UI state.
+  handleTurnEvent(ev: TurnEvent) {
+    const sid = ev.session_id;
+    if (ev.kind === "done") {
+      s.turnBusy = { ...s.turnBusy, [sid]: false };
+    } else if (ev.kind === "started" || ev.kind === "delta" || ev.kind === "tool") {
+      if (!s.turnBusy[sid]) s.turnBusy = { ...s.turnBusy, [sid]: true };
+    }
+
+    const openHere = s.open?.id === sid;
+    switch (ev.kind) {
+      case "started":
+        if (openHere) {
+          s.live = { session: sid, profile: ev.profile ?? "default", segments: [], error: "" };
+        }
+        break;
+      case "delta":
+        if (openHere) {
+          if (!s.live || s.live.session !== sid) {
+            s.live = { session: sid, profile: ev.profile ?? "default", segments: [], error: "" };
+          }
+          const segs = s.live.segments;
+          const last = segs[segs.length - 1];
+          if (last && last.type === "text") last.text += ev.text ?? "";
+          else segs.push({ type: "text", text: ev.text ?? "" });
+          s.autoScroll += 1;
+        }
+        break;
+      case "tool":
+        if (openHere) {
+          if (!s.live || s.live.session !== sid) {
+            s.live = { session: sid, profile: ev.profile ?? "default", segments: [], error: "" };
+          }
+          const segs = s.live.segments;
+          if (ev.tool_state === "done") {
+            for (let i = segs.length - 1; i >= 0; i--) {
+              const g = segs[i];
+              if (g.type === "tool" && g.state === "running" && g.name === ev.tool) {
+                g.state = "done";
+                break;
+              }
+            }
+          } else {
+            segs.push({ type: "tool", name: ev.tool ?? "?", state: "running" });
+          }
+          s.autoScroll += 1;
+        }
+        break;
+      case "error":
+        if (openHere && s.live && s.live.session === sid) {
+          s.live.error = ev.error ?? "error";
+        }
+        if (!openHere) s.statusText = `turn error in ${sid}: ${ev.error ?? "error"}`;
+        break;
+      case "done":
+        if (openHere) {
+          s.live = null;
+          void this.refreshTranscript();
+          s.statusText = ev.stopped
+            ? "turn stopped"
+            : ev.ok === false
+              ? "turn ended with errors"
+              : "turn complete";
+        }
+        break;
+      default:
+        break;
+    }
+  },
+
+  isBusy(node: HubNode): boolean {
+    return !!node.session_id && !!s.turnBusy[node.session_id];
   },
 
   // ---- read state ------------------------------------------------------

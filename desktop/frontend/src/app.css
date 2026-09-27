@@ -472,6 +472,36 @@ button {
   color: var(--faint);
 }
 
+/* ------- live turns ------- */
+
+.msg.live .live-tag {
+  color: var(--green);
+  animation: atlas-pulse 1.6s ease-in-out infinite;
+}
+
+.msg.live .body.live-err {
+  color: var(--red);
+}
+
+@keyframes atlas-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.composer button.stop {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.row .tail.busy {
+  color: var(--green);
+}
+
 /* ------- scrollbars ------- */
 
 ::-webkit-scrollbar {

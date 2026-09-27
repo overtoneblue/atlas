@@ -19,7 +19,10 @@
   }
 
   function tail(r: Row): string {
-    if (r.node.kind === "post") return ageTag(r.node.last_active);
+    if (r.node.kind === "post") {
+      if (actions.isBusy(r.node)) return "◍";
+      return ageTag(r.node.last_active);
+    }
     if (r.node.kind !== "category" && (r.node.children?.length ?? 0) > 0) {
       return s.collapsed.includes(r.key) ? "▸" : "▾";
     }
@@ -56,7 +59,7 @@
       >
         <span class="glyph">{glyph(r)}</span>
         <span class="label">{r.node.name}</span>
-        <span class="tail">{tail(r)}</span>
+        <span class="tail" class:busy={r.node.kind === "post" && actions.isBusy(r.node)}>{tail(r)}</span>
       </div>
     {/each}
   </div>

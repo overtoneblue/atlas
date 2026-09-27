@@ -10,6 +10,16 @@ export function installKeymap(): () => void {
   return () => window.removeEventListener("keydown", onKey, true);
 }
 
+// True when the user has text selected (textarea selection or page
+// selection). Ctrl+C then means "copy", never "stop the turn".
+function hasSelection(): boolean {
+  const el = document.activeElement;
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+    return el.selectionStart !== el.selectionEnd;
+  }
+  return (window.getSelection()?.toString() ?? "") !== "";
+}
+
 function onKey(e: KeyboardEvent) {
   const key = e.key;
 
@@ -31,10 +41,24 @@ function onKey(e: KeyboardEvent) {
       void actions.send();
       return;
     }
+    if (e.ctrlKey && key === "c") {
+      if (s.live && !hasSelection()) {
+        e.preventDefault();
+        void actions.stopTurn();
+      }
+      return;
+    }
     return;
   }
 
   if (e.ctrlKey && !e.metaKey) {
+    if (key === "c") {
+      if (s.live && !hasSelection()) {
+        e.preventDefault();
+        void actions.stopTurn();
+      }
+      return; // otherwise a normal copy
+    }
     if (key === "d") {
       e.preventDefault();
       actions.scrollChat(10);

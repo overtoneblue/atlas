@@ -32,3 +32,15 @@ export async function SendMessage(
 ): Promise<void> {
   await DataService.SendMessage(profile, sessionID, text);
 }
+
+// StopTurn interrupts the in-flight run for a session (best-effort: the Go
+// side falls back to detaching the stream when the run id is not yet known).
+export async function StopTurn(sessionID: string): Promise<void> {
+  await DataService.StopTurn(sessionID);
+}
+
+// The --open startup target (empty string when unset).
+export async function InitialSession(): Promise<string> {
+  return ((await DataService.InitialSession()) as string) ?? "";
+}
+

@@ -56,3 +56,29 @@ export type Row = {
 };
 
 export type Focus = "tree" | "chat" | "composer";
+
+// One live-turn update, emitted by the Go side on "atlas:turn".
+export type TurnEvent = {
+  kind: "started" | "delta" | "tool" | "done" | "error" | string;
+  session_id: string;
+  profile?: string;
+  text?: string;
+  tool?: string;
+  tool_state?: "running" | "done" | string;
+  run_id?: string;
+  ok?: boolean;
+  stopped?: boolean;
+  error?: string;
+};
+
+export type LiveSegment =
+  | { type: "text"; text: string }
+  | { type: "tool"; name: string; state: string };
+
+export type LiveTurn = {
+  session: string;
+  profile: string;
+  segments: LiveSegment[];
+  error: string;
+};
+

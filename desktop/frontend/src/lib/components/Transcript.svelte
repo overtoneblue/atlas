@@ -63,7 +63,27 @@
           </div>
         {/if}
       {/each}
-      {#if s.messages.length === 0 && !s.loadingOpen}
+      {#if s.live && s.live.session === s.open.id}
+        <div class="msg agent live">
+          <div class="head">
+            <span class="who" style={`color:${authorColor()}`}>{authorName()}</span>
+            <span class="time live-tag">● live</span>
+          </div>
+          {#each s.live.segments as seg}
+            {#if seg.type === "tool"}
+              <div class="tool">
+                <span class="tname">{toolGlyph(seg.name)} {seg.name}</span>
+                <span class="snip">{seg.state === "done" ? "✓" : "…"}</span>
+              </div>
+            {:else}
+              <div class="body">{@html mdLite(seg.text)}</div>
+            {/if}
+          {/each}
+          {#if s.live.error}<div class="body live-err">{s.live.error}</div>{/if}
+          {#if s.live.segments.length === 0}<div class="body dim">…thinking</div>{/if}
+        </div>
+      {/if}
+      {#if s.messages.length === 0 && !s.loadingOpen && !s.live}
         <div class="pad dim">empty conversation</div>
       {/if}
     </div>

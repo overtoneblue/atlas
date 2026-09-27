@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"flag"
 	"log"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -15,11 +16,17 @@ import (
 var assets embed.FS
 
 func main() {
+	openSession := flag.String("open", "", "session id to open at startup (dev/testing)")
+	flag.Parse()
+
+	data := NewDataService()
+	data.SetInitialSession(*openSession)
+
 	app := application.New(application.Options{
 		Name:        "atlas-desktop",
 		Description: "Atlas — workstream client for Hermes",
 		Services: []application.Service{
-			application.NewService(NewDataService()),
+			application.NewService(data),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
