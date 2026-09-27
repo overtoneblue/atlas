@@ -1,0 +1,490 @@
+/* Atlas — design tokens + base styles.
+   House palette: warm base16 on black (ported from the TUI theme so the
+   desktop app is recognizably the same family). */
+
+@font-face {
+  font-family: "Inter";
+  src: url("/Inter-Medium.ttf") format("truetype");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --bg: #000000;
+  --surface: #0d0b0a;
+  --surface2: #13100d;
+  --line: #241e18;
+  --sel: #1b1613;
+  --fg: #d8d0c0;
+  --fg-hi: #f4ecdc;
+  --dim: #6b5b4d;
+  --dim2: #8a7a68;
+  --faint: #3a3229;
+  --red: #b06a63;
+  --orange: #a88169;
+  --yellow: #aa956d;
+  --green: #728b72;
+  --cyan: #748886;
+  --blue: #6b8078;
+  --purple: #7d677e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+}
+
+::selection {
+  background: #2e2721;
+}
+
+/* ------- layout ------- */
+
+.app {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  grid-template-rows: 1fr auto;
+  grid-template-areas:
+    "side main"
+    "status status";
+}
+
+.pane {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.main {
+  grid-area: main;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 1fr auto;
+}
+
+/* ------- sidebar ------- */
+
+.sidebar {
+  grid-area: side;
+  min-width: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+}
+
+.pane-title {
+  padding: 10px 14px 8px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+  user-select: none;
+}
+
+.sidebar.focused .pane-title {
+  color: var(--fg-hi);
+}
+
+.rows {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2px 6px 8px;
+  min-height: 0;
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 8px 2px calc(10px + var(--depth) * 13px);
+  border-radius: 3px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.row .glyph {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.row .label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row .tail {
+  flex: none;
+  color: var(--faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.row.sel {
+  background: var(--sel);
+  box-shadow: inset 2px 0 0 var(--yellow);
+}
+
+.row.sel .label {
+  color: var(--fg-hi);
+}
+
+.row.profile .label {
+  color: var(--fg-hi);
+  font-weight: 600;
+}
+
+.row.profile .glyph {
+  color: var(--yellow);
+}
+
+.row.guild .label {
+  color: var(--dim2);
+}
+
+.row.category .label {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.row.category .glyph,
+.row.channel .glyph {
+  color: var(--dim2);
+}
+
+.row.post .label {
+  color: #b8ab99;
+}
+
+.row.unread .glyph {
+  color: var(--yellow);
+}
+
+.row.unread .label {
+  color: var(--fg-hi);
+  font-weight: 600;
+}
+
+.side-foot {
+  flex: none;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 11px;
+  user-select: none;
+}
+
+.side-foot em {
+  font-style: normal;
+  color: var(--yellow);
+}
+
+/* ------- chat ------- */
+
+.chat-head {
+  flex: none;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 12px 18px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-head .title {
+  color: var(--fg-hi);
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.chat-head .dim {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.scroller {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 0 18px;
+  min-height: 0;
+}
+
+.pad {
+  padding: 12px 18px;
+}
+
+.dim {
+  color: var(--dim);
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.empty .big {
+  color: var(--yellow);
+  font-size: 20px;
+  letter-spacing: 0.06em;
+}
+
+.msg {
+  padding: 7px 18px;
+}
+
+.msg.user {
+  display: flex;
+  gap: 10px;
+}
+
+.msg.user .bar {
+  flex: none;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--orange);
+  opacity: 0.75;
+}
+
+.msg.user .body {
+  white-space: pre-wrap;
+  color: var(--fg-hi);
+}
+
+.msg.agent .head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 1px;
+}
+
+.msg.agent .who {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.msg.agent .time {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.msg.agent .body {
+  white-space: pre-wrap;
+}
+
+.msg .body a {
+  color: var(--cyan);
+  text-decoration: none;
+}
+
+.msg .body a:hover {
+  text-decoration: underline;
+}
+
+.msg .body .ic {
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-size: 12px;
+}
+
+.msg .body pre.code {
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+
+.msg .body pre.code code {
+  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.tool {
+  display: flex;
+  gap: 8px;
+  padding: 2px 18px;
+  color: var(--dim);
+  font-size: 11.5px;
+}
+
+.tool .tname {
+  flex: none;
+  color: var(--dim2);
+}
+
+.tool .snip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------- composer ------- */
+
+.composer {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.composer.active {
+  background: var(--surface2);
+}
+
+.composer .cbadge {
+  flex: none;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 3px 6px;
+  margin-bottom: 4px;
+  user-select: none;
+}
+
+.composer.insert .cbadge {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.composer textarea {
+  flex: 1;
+  resize: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg-hi);
+  font: inherit;
+  line-height: 1.5;
+  padding: 4px 2px;
+  max-height: 200px;
+}
+
+.composer textarea::placeholder {
+  color: var(--faint);
+}
+
+.composer button {
+  flex: none;
+  background: var(--sel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.composer button:hover {
+  border-color: var(--yellow);
+  color: var(--fg-hi);
+}
+
+/* ------- status bar ------- */
+
+.statusbar {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--dim);
+  user-select: none;
+}
+
+.statusbar .badge {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 6px;
+  letter-spacing: 0.1em;
+  color: var(--fg);
+}
+
+.statusbar .badge.insert {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.statusbar .msg {
+  color: var(--dim2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar .spacer {
+  flex: 1;
+}
+
+.statusbar .dots span {
+  margin-left: 8px;
+}
+
+.statusbar .dots .ok::before {
+  content: "● ";
+  color: var(--green);
+}
+
+.statusbar .dots .bad::before {
+  content: "● ";
+  color: var(--red);
+}
+
+.statusbar .ver {
+  color: var(--faint);
+}
+
+/* ------- scrollbars ------- */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #221c16;
+  border-radius: 5px;
+  border: 2px solid var(--bg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2e2721;
+}

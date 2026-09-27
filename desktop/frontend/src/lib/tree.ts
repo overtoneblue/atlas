@@ -1,0 +1,83 @@
+// Tree visibility engine — a direct port of the TUI's rules:
+//  · posts idle 7+ days are stowed when hideStale is on (containers left
+//    with nothing to show drop out entirely)
+//  · folded containers stay visible but hide their children (the stale pass
+//    ignores folds; folds apply afterwards)
+//  · empty containers never render
+// Keys are stable name paths (parent/child) so folds survive tree refreshes.
+
+import type { HubNode, Row, Session } from "./types";
+
+export const STALE_S = 7 * 24 * 3600; // seconds
+
+export function isStale(node: HubNode, now: number): boolean {
+  if (node.kind !== "post") return false;
+  const ts = node.last_active ?? 0;
+  if (ts <= 0) return false; // unknown activity never stows
+  return now - ts > STALE_S;
+}
+
+export type TreeCtx = {
+  collapsed: Set<string>;
+  hideStale: boolean;
+  now: number;
+};
+
+export function buildRows(
+  sections: HubNode[],
+  ctx: TreeCtx,
+): { rows: Row[]; hidden: number; total: number } {
+  const rows: Row[] = [];
+  let hidden = 0;
+  let total = 0;
+
+  function project(node: HubNode, key: string, depth: number): { rows: Row[]; hidden: number } {
+    if (node.kind === "post") {
+      total += 1;
+      if (ctx.hideStale && isStale(node, ctx.now)) return { rows: [], hidden: 1 };
+      return { rows: [{ node, key, depth }], hidden: 0 };
+    }
+    const kids = node.children ?? [];
+    let kidRows: Row[] = [];
+    let hid = 0;
+    for (const k of kids) {
+      const p = project(k, key + "/" + k.name, depth + 1);
+      kidRows = kidRows.concat(p.rows);
+      hid += p.hidden;
+    }
+    if (kidRows.length === 0) {
+      // nothing left to show (empty, or everything stowed)
+      return { rows: [], hidden: hid };
+    }
+    const self: Row = { node, key, depth };
+    if (ctx.collapsed.has(key)) return { rows: [self], hidden: hid };
+    return { rows: [self].concat(kidRows), hidden: hid };
+  }
+
+  for (const s of sections) {
+    const p = project(s, s.name, 0);
+    rows.push(...p.rows);
+    hidden += p.hidden;
+  }
+  return { rows, hidden, total };
+}
+
+// Fallback: flat session list when the hub is down.
+export function buildSessionRows(
+  sessions: Session[],
+  ctx: TreeCtx,
+): { rows: Row[]; hidden: number; total: number } {
+  const category: HubNode = {
+    kind: "category",
+    name: "RECENT SESSIONS",
+    children: sessions.map((s) => ({
+      kind: "post" as const,
+      name: s.title || s.id,
+      session_id: s.id,
+      profile: "default",
+      last_active: s.last_active,
+      message_count: s.message_count,
+    })),
+  };
+  return buildRows([category], ctx);
+}

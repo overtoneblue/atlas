@@ -23,23 +23,27 @@ if [[ ! -x "$BIN" ]]; then
   exit 1
 fi
 
-pkill -f "Xvfb :99" 2>/dev/null || true
-
-nix shell nixpkgs#xvfb nixpkgs#imagemagick nixpkgs#mesa -c bash -c '
+# Note: the display number is picked inside the nix shell block, and we
+# deliberately never pkill by pattern here — the script's own command line
+# contains that pattern and pkill would match itself.
+nix shell nixpkgs#xvfb nixpkgs#imagemagick nixpkgs#mesa -c bash -s -- "$BIN" "$OUT" "$SETTLE" <<'EOS'
 set -euo pipefail
+BIN="$1"; OUT="$2"; SETTLE="$3"
+
 MESA=$(nix build --print-out-paths --no-link nixpkgs#mesa)
 export __EGL_VENDOR_LIBRARY_FILENAMES=$MESA/share/glvnd/egl_vendor.d/50_mesa.json
 export LIBGL_DRIVERS_PATH=$MESA/lib/dri
 export LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe
 export WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1
 
-Xvfb :99 -screen 0 1400x900x24 >/tmp/xvfb-atlas.log 2>&1 &
+DISP=":9$(( RANDOM % 9 ))"
+Xvfb "$DISP" -screen 0 1600x1000x24 >/tmp/xvfb-atlas.log 2>&1 &
 XPID=$!
 sleep 2
-DISPLAY=:99 GDK_BACKEND=x11 "'"$BIN"'" >/tmp/atlas-app.log 2>&1 &
+DISPLAY="$DISP" GDK_BACKEND=x11 "$BIN" >/tmp/atlas-app.log 2>&1 &
 APID=$!
-sleep "'"$SETTLE"'"
-DISPLAY=:99 import -window root "'"$OUT"'"
-kill $APID $XPID 2>/dev/null || true
-echo "wrote '"$OUT"'"
-'
+sleep "$SETTLE"
+DISPLAY="$DISP" import -window root "$OUT"
+kill "$APID" "$XPID" 2>/dev/null || true
+echo "wrote $OUT"
+EOS
