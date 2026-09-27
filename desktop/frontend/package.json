@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build:dev": "vite build --minify false --mode development",
-    "build": "vite build --mode production",
+    "build": "vite build --mode wails",
+    "build:dev": "vite build --minify false --mode wails-dev",
+    "build:web": "vite build --mode web",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },

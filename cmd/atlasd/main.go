@@ -11,6 +11,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -20,8 +21,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"atlas/internal/daemon"
@@ -32,7 +35,12 @@ func main() {
 	port := flag.Int("port", 8644, "listen port")
 	webDir := flag.String("web", "", "directory with the built web UI (default: desktop/frontend/dist)")
 	openSession := flag.String("open", "", "session id to open on boot")
+	dieParent := flag.Bool("die-with-parent", false, "exit when the parent process dies (Linux PDEATHSIG)")
 	flag.Parse()
+
+	if *dieParent {
+		dieWithParent()
+	}
 
 	svc := daemon.New()
 	if *openSession != "" {
@@ -65,9 +73,21 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort(*addr, strconv.Itoa(*port)),
-		Handler:           withLoopbackCORS(mux),
+		Handler:           withRequestLog(withLoopbackCORS(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
+	// Clean shutdown on TERM/INT (kill from a shell, service managers).
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+		<-sig
+		log.Printf("atlasd: shutting down")
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
+
 	log.Printf("atlasd: listening on http://%s", srv.Addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
@@ -240,6 +260,33 @@ func withLoopbackCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// withRequestLog prints one line per request (method, URI, status) so the
+// daemon is debuggable from its own stdout. It preserves http.Flusher so
+// the SSE stream keeps working through the wrapper.
+func withRequestLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lw := &logWriter{ResponseWriter: w, code: http.StatusOK}
+		next.ServeHTTP(lw, r)
+		log.Printf("%s %s → %d", r.Method, r.URL.RequestURI(), lw.code)
+	})
+}
+
+type logWriter struct {
+	http.ResponseWriter
+	code int
+}
+
+func (l *logWriter) WriteHeader(code int) {
+	l.code = code
+	l.ResponseWriter.WriteHeader(code)
+}
+
+func (l *logWriter) Flush() {
+	if f, ok := l.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func loopbackOrigin(origin string) bool {

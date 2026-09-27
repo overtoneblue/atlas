@@ -1,46 +1,35 @@
-// The frontend's entire data layer: thin wrappers over the Go DataService
-// bindings. When the head-side daemon arrives, only this file changes —
-// everything above it stays identical (that's the browser port story).
+// The frontend's entire data layer — now transport-agnostic. The active
+// transport is picked once (Wails legacy shell vs atlasd HTTP+SSE);
+// everything above this file stays identical either way.
 
-import { DataService } from "../../bindings/atlas/desktop";
-import type { HubTree, Message, Session, Status } from "./types";
+import type { HubTree, Message, Session, Status as StatusT } from "./types";
+import { isWails } from "./transport";
+import * as http from "./transport-http";
+import * as wails from "./transport-wails";
 
-export async function Status(): Promise<Status> {
-  return (await DataService.Status()) as Status;
-}
+const t = isWails() ? wails : http;
 
-export async function GetTree(): Promise<HubTree> {
-  return (await DataService.GetTree()) as unknown as HubTree;
-}
+export const Status = (): Promise<StatusT> => t.Status();
 
-export async function GetSessions(limit: number): Promise<Session[]> {
-  return (await DataService.GetSessions(limit)) as unknown as Session[];
-}
+export const GetTree = (): Promise<HubTree> => t.GetTree();
 
-export async function GetMessages(
+export const GetSessions = (limit: number): Promise<Session[]> => t.GetSessions(limit);
+
+export const GetMessages = (
   profile: string,
   sessionID: string,
   limit: number,
-): Promise<Message[]> {
-  return (await DataService.GetMessages(profile, sessionID, limit)) as unknown as Message[];
-}
+): Promise<Message[]> => t.GetMessages(profile, sessionID, limit);
 
-export async function SendMessage(
+export const SendMessage = (
   profile: string,
   sessionID: string,
   text: string,
-): Promise<void> {
-  await DataService.SendMessage(profile, sessionID, text);
-}
+): Promise<void> => t.SendMessage(profile, sessionID, text);
 
-// StopTurn interrupts the in-flight run for a session (best-effort: the Go
-// side falls back to detaching the stream when the run id is not yet known).
-export async function StopTurn(sessionID: string): Promise<void> {
-  await DataService.StopTurn(sessionID);
-}
+// StopTurn interrupts the in-flight run for a session (best-effort: atlasd
+// falls back to detaching the stream when the run id is not yet known).
+export const StopTurn = (sessionID: string): Promise<void> => t.StopTurn(sessionID);
 
 // The --open startup target (empty string when unset).
-export async function InitialSession(): Promise<string> {
-  return ((await DataService.InitialSession()) as string) ?? "";
-}
-
+export const InitialSession = (): Promise<string> => t.InitialSession();

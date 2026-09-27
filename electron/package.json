@@ -1,0 +1,7 @@
+{
+  "name": "atlas-electron",
+  "private": true,
+  "version": "1.0.0-dev",
+  "description": "Atlas desktop shell (Electron) — a Chromium window over the atlasd bridge.",
+  "main": "main.js"
+}
