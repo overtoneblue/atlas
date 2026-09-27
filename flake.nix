@@ -59,7 +59,7 @@
               "Development"
               "Utility"
             ];
-            startupWMClass = "atlas-desktop";
+            startupWMClass = "org.wails.atlas-desktop";
           };
 
           # Shared inputs for both Go builds.
