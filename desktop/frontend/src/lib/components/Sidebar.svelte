@@ -2,7 +2,6 @@
   import { s, actions } from "../state.svelte";
   import { ageTag } from "../format";
   import type { Row } from "../types";
-  import { installSmoothScroll } from "../smoothscroll";
 
   function glyph(r: Row): string {
     switch (r.node.kind) {
@@ -31,14 +30,6 @@
   }
 
   let el = $state<HTMLElement | null>(null);
-  let rowsEl = $state<HTMLElement | null>(null);
-
-  $effect(() => {
-    const target = rowsEl;
-    if (!target) return;
-    return installSmoothScroll(target);
-  });
-
   $effect(() => {
     // keep the cursor row in view
     void s.cursor;
@@ -54,7 +45,7 @@
   onclick={() => actions.setFocus("tree")}
 >
   <div class="pane-title">WORKSTREAMS</div>
-  <div class="rows" bind:this={rowsEl}>
+  <div class="rows">
     {#each s.rows as r, i (r.key)}
       <div
         class="row {r.node.kind}"

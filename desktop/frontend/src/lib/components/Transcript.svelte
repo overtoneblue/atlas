@@ -2,15 +2,8 @@
   import { onMount } from "svelte";
   import { s, actions } from "../state.svelte";
   import { mdLite, timeHM, toolGlyph, firstLine } from "../format";
-  import { installSmoothScroll } from "../smoothscroll";
 
   let scroller = $state<HTMLDivElement | null>(null);
-
-  $effect(() => {
-    const el = scroller;
-    if (!el) return;
-    return installSmoothScroll(el);
-  });
   let stick = true;
 
   onMount(() => {
