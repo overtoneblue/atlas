@@ -25,6 +25,13 @@ const http = require("node:http");
 const PORT = Number(process.env.ATLASD_PORT || 8644);
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 
+// Native animated wheel scrolling. Measured on this exact build (Electron
+// 43 / Chromium 150): wheel already animates natively — ~120px over ~270ms,
+// ~12 frames per notch — and this switch changes nothing (A/B identical).
+// Kept explicit so a future build can't silently regress to stepped
+// scrolling. No app-side physics: the compositor owns scroll.
+app.commandLine.appendSwitch("enable-smooth-scrolling");
+
 let daemon = null;
 let win = null;
 let quitting = false;
