@@ -32,9 +32,11 @@
   $effect(() => {
     findRuntime.recompute = recompute;
     findRuntime.goto = goto;
+    findRuntime.msgAt = msgAt;
     return () => {
       findRuntime.recompute = null;
       findRuntime.goto = null;
+      findRuntime.msgAt = null;
     };
   });
 
@@ -120,6 +122,21 @@
     const rr = r.getBoundingClientRect();
     const cr = scroller.getBoundingClientRect();
     scroller.scrollTop += rr.top - cr.top - cr.height / 3;
+  }
+
+  // Which message row a match lives in — the state layer uses this to
+  // anchor `v` at the find cursor and to extend a selection with n/N.
+  function msgAt(i: number): number {
+    const r = ranges[i];
+    if (!r) return -1;
+    let el: Node | null = r.startContainer;
+    while (el) {
+      if (el instanceof HTMLElement && el.dataset.mi !== undefined) {
+        return Number(el.dataset.mi);
+      }
+      el = el.parentNode;
+    }
+    return -1;
   }
 
   // ---- visuals ----------------------------------------------------------

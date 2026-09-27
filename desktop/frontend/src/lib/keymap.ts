@@ -146,6 +146,18 @@ function onKey(e: KeyboardEvent) {
         e.preventDefault();
         void actions.visualYank();
         return;
+      case "/":
+        e.preventDefault();
+        actions.findStart();
+        return;
+      case "n":
+        e.preventDefault();
+        actions.findNext(1);
+        return;
+      case "N":
+        e.preventDefault();
+        actions.findNext(-1);
+        return;
       case "Escape":
         e.preventDefault();
         actions.visualCancel();

@@ -58,6 +58,8 @@ func main() {
 	mux.HandleFunc("GET /api/status", api.status)
 	mux.HandleFunc("GET /api/initial", api.initial)
 	mux.HandleFunc("GET /api/tree", api.tree)
+	mux.HandleFunc("GET /api/spawned", api.spawned)
+	mux.HandleFunc("GET /api/spawn-log", api.spawnLog)
 	mux.HandleFunc("GET /api/sessions", api.sessions)
 	mux.HandleFunc("GET /api/messages", api.messages)
 	mux.HandleFunc("POST /api/send", api.send)
@@ -108,6 +110,32 @@ func (a *api) tree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, t)
+}
+
+func (a *api) spawned(w http.ResponseWriter, r *http.Request) {
+	list, err := a.svc.GetSpawned()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, list)
+}
+
+func (a *api) spawnLog(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	kind, id := q.Get("kind"), q.Get("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, errors.New("id is required"))
+		return
+	}
+	task, _ := strconv.Atoi(q.Get("task"))
+	lines, _ := strconv.Atoi(q.Get("lines"))
+	text, err := a.svc.GetSpawnLog(kind, id, task, lines)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, map[string]string{"text": text})
 }
 
 func (a *api) sessions(w http.ResponseWriter, r *http.Request) {

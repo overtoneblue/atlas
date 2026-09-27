@@ -4,6 +4,18 @@
   import type { Row } from "../types";
 
   function glyph(r: Row): string {
+    if (r.node.kind === "spawn") {
+      switch (r.node.spawn?.state) {
+        case "running":
+          return "◍";
+        case "done":
+          return "✓";
+        case "failed":
+          return "✗";
+        default:
+          return "·";
+      }
+    }
     switch (r.node.kind) {
       case "profile":
         return "◆";
@@ -19,6 +31,10 @@
   }
 
   function tail(r: Row): string {
+    if (r.node.kind === "spawn") {
+      const st = r.node.spawn?.state ?? "";
+      return st === "running" ? "◍" : st;
+    }
     if (r.node.kind === "post") {
       if (actions.isBusy(r.node)) return "◍";
       return ageTag(r.node.last_active);

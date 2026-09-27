@@ -1,8 +1,9 @@
 // Central app state — Svelte 5 runes. ALL mutations flow through `actions`;
 // components only read `s` and call actions. Ports the TUI's behaviors:
 // stale-stows, folds, unread tracking, vim focus model — plus the v2 live
-// turn machine (streamed deltas + tool activity, stop support) and the
-// parity layer (find, visual/yank, counts, image paste).
+// turn machine (streamed deltas + tool activity, stop support), the parity
+// layer (find, visual/yank, counts, image paste), and spawned-work rows
+// (subagent runs + pi tasks nested under their chat).
 
 import type {
   Focus,
@@ -11,6 +12,7 @@ import type {
   Message,
   Row,
   Session,
+  SpawnItem,
   Status,
   TurnEvent,
 } from "./types";
@@ -55,6 +57,7 @@ export const s = $state({
   findQuery: "",
   findCount: 0,
   findCur: 0,
+  findMsg: -1, // message index holding the current match (visual's anchor)
   // visual selection (message-index range)
   visual: false,
   visualAnchor: 0,
@@ -64,6 +67,10 @@ export const s = $state({
   showReasoning: false,
   pendingCount: 0, // vim count prefix (3j)
   attachments: [] as string[], // pasted images awaiting send (data URLs)
+  // spawned work: parent session id -> its subagent runs + pi tasks
+  spawned: {} as Record<string, SpawnItem[]>,
+  // the live-log viewer (one spawned run), null when hidden
+  logView: null as { item: SpawnItem } | null,
 });
 
 let chatScroller: HTMLDivElement | null = null;
@@ -96,6 +103,7 @@ export const actions = {
       s.status = null;
     }
     await this.refreshTree(true);
+    void this.refreshSpawned();
 
     // Open target: --open session when present, else the first visible post.
     let target: HubNode | null = null;
@@ -140,10 +148,34 @@ export const actions = {
     this.rebuild(initial);
   },
 
+  // refreshSpawned pulls the spawned-work index and rebuilds the tree only
+  // when something changed (so the cursor doesn't twitch every poll).
+  async refreshSpawned() {
+    try {
+      const list = await api.GetSpawned();
+      const map: Record<string, SpawnItem[]> = {};
+      for (const it of list.items ?? []) {
+        if (!it.parent) continue; // cannot be placed under a chat
+        if (!map[it.parent]) map[it.parent] = [];
+        map[it.parent].push(it);
+      }
+      if (JSON.stringify(map) === JSON.stringify(s.spawned)) return;
+      s.spawned = map;
+      this.rebuild();
+    } catch {
+      /* hub down: keep the last known map */
+    }
+  },
+
   rebuild(initial = false) {
     const cur = s.rows[s.cursor]?.key ?? "";
     const now = Date.now() / 1000;
-    const ctx = { collapsed: new Set(s.collapsed), hideStale: s.hideStale, now };
+    const ctx = {
+      collapsed: new Set(s.collapsed),
+      hideStale: s.hideStale,
+      now,
+      spawned: s.spawned,
+    };
     const built = s.sections.length
       ? buildRows(s.sections, ctx)
       : buildSessionRows(s.sessions, ctx);
@@ -178,6 +210,10 @@ export const actions = {
   enter() {
     const r = s.rows[s.cursor];
     if (!r) return;
+    if (r.node.kind === "spawn" && r.node.spawn) {
+      this.openSpawn(r.node.spawn);
+      return;
+    }
     if (r.node.kind === "post" && r.node.session_id) {
       void this.openPost(r.node);
       return;
@@ -188,6 +224,18 @@ export const actions = {
   clickRow(i: number) {
     s.cursor = i;
     this.enter();
+  },
+
+  openSpawn(it: SpawnItem) {
+    s.logView = { item: it };
+    this.setFocus("chat");
+    s.statusText = `${it.kind} ${it.id} — esc closes`;
+  },
+
+  closeLog() {
+    s.logView = null;
+    this.setFocus("tree");
+    s.statusText = "";
   },
 
   toggleFold(key: string) {
@@ -207,7 +255,7 @@ export const actions = {
 
   foldAt(collapse: boolean) {
     const r = s.rows[s.cursor];
-    if (!r || r.node.kind === "post") return;
+    if (!r || r.node.kind === "post" || r.node.kind === "spawn") return;
     if (!(r.node.children ?? []).length) return;
     const folded = s.collapsed.includes(r.key);
     if (collapse && !folded) this.toggleFold(r.key);
@@ -233,6 +281,8 @@ export const actions = {
     s.loadingOpen = true;
     s.visual = false;
     s.findOpen = false;
+    s.findMsg = -1;
+    s.logView = null;
     s.pendingCount = 0;
     this.markRead(id);
     try {
@@ -265,6 +315,10 @@ export const actions = {
   // ---- find (transcript search) ---------------------------------------
 
   findStart() {
+    if (s.logView) {
+      s.statusText = "close the log view first (esc)";
+      return;
+    }
     if (!s.open) {
       s.statusText = "open a workstream to search";
       return;
@@ -274,7 +328,8 @@ export const actions = {
     s.findCount = 0;
     s.findCur = 0;
     s.pendingCount = 0;
-    s.visual = false;
+    // vim-true: starting a search does NOT cancel a visual selection —
+    // the match extends it (see syncFindMsg below).
   },
 
   findSetQuery(q: string) {
@@ -282,12 +337,14 @@ export const actions = {
     s.findCur = 0;
     findRuntime.recompute?.();
     if (s.findCount > 0) findRuntime.goto?.(0);
+    syncFindMsg();
   },
 
   findAccept() {
     s.findOpen = false;
     if (s.findQuery && s.findCount > 0) {
       findRuntime.goto?.(s.findCur);
+      syncFindMsg();
       s.statusText = `match ${s.findCur + 1}/${s.findCount} — n/N step`;
     } else {
       s.statusText = s.findQuery ? "no matches" : "";
@@ -312,6 +369,7 @@ export const actions = {
     const n = s.findCount;
     s.findCur = ((s.findCur + dir) % n + n) % n;
     findRuntime.goto?.(s.findCur);
+    syncFindMsg();
     s.statusText = `match ${s.findCur + 1}/${n}`;
   },
 
@@ -329,10 +387,16 @@ export const actions = {
       s.visualCur = s.messages.length - 1;
       s.statusText = `visual: whole conversation (${s.messages.length}) — y yank · esc cancel`;
     } else {
-      const i = topVisibleMessage();
+      // vim-true anchor: a completed find leaves the cursor at its match.
+      const fromFind = !!(s.findQuery && s.findCount > 0 && s.findMsg >= 0);
+      const i = fromFind
+        ? Math.min(s.findMsg, s.messages.length - 1)
+        : topVisibleMessage();
       s.visualAnchor = i;
       s.visualCur = i;
-      s.statusText = "visual — j/k extend · y yank · esc cancel";
+      s.statusText = fromFind
+        ? `visual from match ${s.findCur + 1}/${s.findCount} — j/k · n/N extend · y yank · esc cancel`
+        : "visual — j/k extend · y yank · esc cancel";
     }
     scrollRowIntoView(s.visualCur, "nearest");
   },
@@ -599,6 +663,10 @@ export const actions = {
       s.findOpen = false;
       return;
     }
+    if (s.logView) {
+      this.closeLog();
+      return;
+    }
     if (s.focus === "composer") {
       if (s.mode === "INSERT") {
         s.mode = "NORMAL";
@@ -632,7 +700,8 @@ function errText(e: unknown): string {
   return m ?? String(e);
 }
 
-// The topmost visibly-fully-or-partially message row: the anchor for `v`.
+// The topmost visibly-fully-or-partially message row: the `v` anchor when
+// no find cursor exists.
 function topVisibleMessage(): number {
   if (!chatScroller) return 0;
   const cr = chatScroller.getBoundingClientRect();
@@ -642,6 +711,19 @@ function topVisibleMessage(): number {
     }
   }
   return Math.max(0, s.messages.length - 1);
+}
+
+// After any find jump: remember the match's message (visual's anchor seed)
+// and, while a selection is active, extend it to the match — vim acts the
+// same way (`/`, `n`, `N` all work mid-visual).
+function syncFindMsg() {
+  const mi = findRuntime.msgAt?.(s.findCur);
+  if (mi == null || mi < 0) return;
+  s.findMsg = mi;
+  if (s.visual) {
+    s.visualCur = Math.max(0, Math.min(s.messages.length - 1, mi));
+    scrollRowIntoView(s.visualCur, "nearest");
+  }
 }
 
 function scrollRowIntoView(i: number, block: ScrollLogicalPosition = "center") {

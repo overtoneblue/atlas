@@ -3,7 +3,7 @@
 
 import { DataService } from "../../bindings/atlas/desktop";
 import { Events } from "@wailsio/runtime";
-import type { HubTree, Message, Session, Status as StatusT, TurnEvent } from "./types";
+import type { HubTree, Message, Session, SpawnList, Status as StatusT, TurnEvent } from "./types";
 
 export async function Status(): Promise<StatusT> {
   return (await DataService.Status()) as StatusT;
@@ -37,6 +37,20 @@ export async function SendMessage(
 
 // No image relay on the legacy shell.
 export async function AttachImage(_dataUrl: string): Promise<string> {
+  return "";
+}
+
+// Spawned work isn't surfaced in the legacy shell.
+export async function FetchSpawned(): Promise<SpawnList> {
+  return { items: [] };
+}
+
+export async function FetchSpawnLog(
+  _kind: string,
+  _id: string,
+  _task: number,
+  _lines: number,
+): Promise<string> {
   return "";
 }
 

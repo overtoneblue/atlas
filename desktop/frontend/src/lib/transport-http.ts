@@ -5,7 +5,7 @@
 // relative URLs just work. During vite dev the UI runs on :9245, so point
 // VITE_ATLASD_URL at the daemon; atlasd allows loopback-origin CORS.
 
-import type { HubTree, Message, Session, Status as StatusT, TurnEvent } from "./types";
+import type { HubTree, Message, Session, SpawnList, Status as StatusT, TurnEvent } from "./types";
 
 const BASE: string = import.meta.env.VITE_ATLASD_URL ?? "";
 
@@ -89,6 +89,24 @@ export async function StopTurn(sessionID: string): Promise<void> {
 export async function InitialSession(): Promise<string> {
   const v = await get<string | null>("/api/initial");
   return v ?? "";
+}
+
+// Spawned work across the suite (hub scan: delegation ledger + live logs +
+// pi task quartet).
+export async function FetchSpawned(): Promise<SpawnList> {
+  return get("/api/spawned");
+}
+
+// Text tail of one spawned run's live log (the hub shapes the path).
+export async function FetchSpawnLog(
+  kind: string,
+  id: string,
+  task: number,
+  lines: number,
+): Promise<string> {
+  const q = `kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}&task=${task}&lines=${lines}`;
+  const r = await get<{ text?: string }>(`/api/spawn-log?${q}`);
+  return r.text ?? "";
 }
 
 export function subscribeTurn(onEvent: (ev: TurnEvent) => void): () => void {

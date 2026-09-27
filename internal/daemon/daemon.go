@@ -151,6 +151,28 @@ func (d *Service) GetTree() (*hermes.HubTree, error) {
 	return d.hub.FetchTree(ctx)
 }
 
+// GetSpawned lists recent spawned work (subagent runs + pi tasks), parents
+// resolved to session ids where the hub could resolve them.
+func (d *Service) GetSpawned() (*hermes.SpawnList, error) {
+	if !d.hub.Configured() {
+		return nil, errors.New("hub not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return d.hub.FetchSpawned(ctx)
+}
+
+// GetSpawnLog tails one spawned run's live log (delegation task-N.log or a
+// pi task log; the hub constrains the paths).
+func (d *Service) GetSpawnLog(kind, id string, task, lines int) (string, error) {
+	if !d.hub.Configured() {
+		return "", errors.New("hub not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return d.hub.FetchSpawnLog(ctx, kind, id, task, lines)
+}
+
 // GetSessions is the flat fallback list when the hub is unavailable.
 func (d *Service) GetSessions(limit int) ([]hermes.Session, error) {
 	if !d.api.Configured() {

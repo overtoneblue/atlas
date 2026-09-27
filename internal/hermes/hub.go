@@ -82,6 +82,80 @@ func (h *Hub) FetchTree(ctx context.Context) (*HubTree, error) {
 	return &t, nil
 }
 
+// SpawnItem is one spawned-work row (subagent run or pi task) with its
+// parent chat resolved to a session id where the hub could resolve it.
+type SpawnItem struct {
+	Kind      string  `json:"kind"` // subagent | pi
+	ID        string  `json:"id"`
+	Profile   string  `json:"profile,omitempty"`
+	Parent    string  `json:"parent,omitempty"`
+	ParentCh  string  `json:"parent_chat,omitempty"`
+	State     string  `json:"state"` // running | done | failed | unknown
+	Title     string  `json:"title"`
+	Started   float64 `json:"started,omitempty"`
+	Completed float64 `json:"completed,omitempty"`
+	Tasks     int     `json:"tasks,omitempty"`
+	HasLog    bool    `json:"has_log,omitempty"`
+	RC        *int    `json:"rc,omitempty"`
+}
+
+type SpawnList struct {
+	Items  []SpawnItem `json:"items"`
+	Errors []string    `json:"errors,omitempty"`
+}
+
+// FetchSpawned lists recent spawned work across every profile.
+func (h *Hub) FetchSpawned(ctx context.Context) (*SpawnList, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.BaseURL+"/spawned", nil)
+	if err != nil {
+		return nil, err
+	}
+	if h.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+h.Key)
+	}
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET /spawned: HTTP %d", resp.StatusCode)
+	}
+	var l SpawnList
+	if err := json.NewDecoder(resp.Body).Decode(&l); err != nil {
+		return nil, err
+	}
+	return &l, nil
+}
+
+// FetchSpawnLog tails one spawned run's live log (the hub constrains the
+// resolved path to the delegation/pi roots).
+func (h *Hub) FetchSpawnLog(ctx context.Context, kind, id string, task, lines int) (string, error) {
+	u := fmt.Sprintf("%s/spawn-log?kind=%s&id=%s&task=%d&lines=%d",
+		h.BaseURL, url.QueryEscape(kind), url.QueryEscape(id), task, lines)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+h.Key)
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("spawn-log: HTTP %d", resp.StatusCode)
+	}
+	var out struct {
+		Text string `json:"text"`
+		Err  string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.Text, nil
+}
+
 // MirrorTurn relays a completed turn into the session's Discord thread with
 // native-style artifacts (tool lines, reasoning + reply, stats card).
 // Returns (false, nil) when the session has no Discord binding.

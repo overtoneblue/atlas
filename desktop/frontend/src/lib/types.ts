@@ -2,8 +2,28 @@
 // (The generated bindings carry their own copies; these keep the frontend
 // readable and independent of generator output.)
 
+export type SpawnItem = {
+  kind: "subagent" | "pi";
+  id: string;
+  profile?: string;
+  parent?: string;
+  parent_chat?: string;
+  state: "running" | "done" | "failed" | "unknown";
+  title: string;
+  started?: number;
+  completed?: number;
+  tasks?: number;
+  has_log?: boolean;
+  rc?: number | null;
+};
+
+export type SpawnList = {
+  items: SpawnItem[];
+  errors?: string[];
+};
+
 export type HubNode = {
-  kind: "profile" | "guild" | "category" | "channel" | "post";
+  kind: "profile" | "guild" | "category" | "channel" | "post" | "spawn";
   name: string;
   profile?: string;
   session_id?: string;
@@ -12,6 +32,8 @@ export type HubNode = {
   message_count?: number;
   pinned?: boolean;
   children?: HubNode[];
+  // set only on synthetic "spawn" rows (client-built, nested under a post)
+  spawn?: SpawnItem;
 };
 
 export type HubTree = {

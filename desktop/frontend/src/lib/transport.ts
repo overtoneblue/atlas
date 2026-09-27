@@ -7,7 +7,7 @@
 // Picked at BUILD time via __ATLAS_WAILS__ (see vite.config.ts). Nothing
 // above this file knows or cares which one is active.
 
-import type { HubTree, Message, Session, Status, TurnEvent } from "./types";
+import type { HubTree, Message, Session, SpawnList, Status, TurnEvent } from "./types";
 
 export interface Transport {
   Status(): Promise<Status>;
@@ -18,6 +18,8 @@ export interface Transport {
   AttachImage(dataUrl: string): Promise<string>;
   StopTurn(sessionID: string): Promise<void>;
   InitialSession(): Promise<string>;
+  FetchSpawned(): Promise<SpawnList>;
+  FetchSpawnLog(kind: string, id: string, task: number, lines: number): Promise<string>;
   subscribeTurn(onEvent: (ev: TurnEvent) => void): () => void;
 }
 

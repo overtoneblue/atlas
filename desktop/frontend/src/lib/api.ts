@@ -2,7 +2,7 @@
 // transport is picked at build time (Wails legacy shell vs atlasd
 // HTTP+SSE); everything above this file stays identical either way.
 
-import type { HubTree, Message, Session, Status as StatusT } from "./types";
+import type { HubTree, Message, Session, SpawnList, Status as StatusT } from "./types";
 import { isWails } from "./transport";
 import * as http from "./transport-http";
 import * as wails from "./transport-wails";
@@ -38,3 +38,14 @@ export const StopTurn = (sessionID: string): Promise<void> => t.StopTurn(session
 
 // The --open startup target (empty string when unset).
 export const InitialSession = (): Promise<string> => t.InitialSession();
+
+// Spawned work (subagent runs + pi tasks), for nesting under their chat.
+export const GetSpawned = (): Promise<SpawnList> => t.FetchSpawned();
+
+// Text tail of one spawned run's live log.
+export const GetSpawnLog = (
+  kind: string,
+  id: string,
+  task: number,
+  lines: number,
+): Promise<string> => t.FetchSpawnLog(kind, id, task, lines);

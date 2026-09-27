@@ -299,6 +299,235 @@ def build_profile_section(prof, errors):
     return {"kind": "profile", "name": prof["display"], "profile": prof["name"], "children": children}
 
 
+# ---- spawned work: subagent runs + pi tasks, nestable under their chat ----
+#
+# Sources, cheapest first:
+#   · async_delegations (state.db, read-only) — live state + parent linkage
+#     (parent_session_id, or a thread id inside origin_session)
+#   · cache/delegation/live/<deleg_id>/manifest.json — goals + log paths
+#     (7-day retention; survives ledger cleanup)
+#   · pi task quartet (spec/log/status/meta) — parent stamped by pi-task
+#     when dispatched from an agent session
+# Every item resolves its parent to a session id when possible; the app
+# drops items it cannot place under a chat.
+
+SPAWN_STATES = {
+    "running": "running", "finalizing": "running",
+    "completed": "done", "failed": "failed", "error": "failed",
+}
+
+
+def _live_dir_root(prof):
+    return os.path.join(prof["home"], "cache", "delegation", "live")
+
+
+def _thread_from_origin(origin):
+    if not origin or "thread:" not in origin:
+        return ""
+    return origin.split("thread:", 1)[1].split(":", 1)[0].strip()
+
+
+def _session_for_thread(prof, thread_id):
+    if not thread_id:
+        return ""
+    con = sqlite3.connect(f"file:{prof['db']}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        row = con.execute(
+            "SELECT id FROM sessions WHERE thread_id=? ORDER BY last_activity_at DESC LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+        return row["id"] if row else ""
+    finally:
+        con.close()
+
+
+def _load_delegations(prof):
+    """Recent async-delegation ledger rows for one profile."""
+    since = time.time() - 8 * 24 * 3600
+    con = sqlite3.connect(f"file:{prof['db']}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        return con.execute(
+            "SELECT delegation_id, state, origin_session, parent_session_id, task_json, "
+            "dispatched_at, completed_at FROM async_delegations "
+            "WHERE updated_at >= ? ORDER BY updated_at DESC LIMIT 120",
+            (since,),
+        ).fetchall()
+    finally:
+        con.close()
+
+
+def _tasks_from_manifest(m):
+    out = []
+    for t in (m.get("tasks") or []):
+        if isinstance(t, dict):
+            out.append({
+                "i": int(t.get("index") or 0),
+                "goal": str(t.get("goal") or ""),
+                "status": str(t.get("status") or ""),
+            })
+    return out
+
+
+def _read_kv(path):
+    out = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    out[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return out
+
+
+def _parse_ts(s):
+    """ISO8601 (optionally tz-aware) or '%Y-%m-%d %H:%M:%S' -> epoch, else 0."""
+    if not s:
+        return 0.0
+    try:
+        from datetime import datetime
+        if "T" in s:
+            return datetime.fromisoformat(s).timestamp()
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _pi_tasks_dir():
+    return os.environ.get("ATLAS_PI_TASKS") or "/mnt/cache/appdata/pi/tasks"
+
+
+def spawn_items():
+    """Every recent spawned run across profiles, each with its parent chat
+    resolved to a session id when it can be."""
+    items, errors = [], []
+
+    for prof in PROFILES:
+        seen = set()
+        # -- ledger rows (live state + parent) --------------------------
+        try:
+            rows = _load_delegations(prof)
+        except sqlite3.Error:
+            rows = []
+        dirs = {}
+        try:
+            for name in os.listdir(_live_dir_root(prof)):
+                if name.startswith("deleg_"):
+                    d = {}
+                    mpath = os.path.join(_live_dir_root(prof), name, "manifest.json")
+                    try:
+                        with open(mpath) as f:
+                            d = json.load(f)
+                    except (OSError, ValueError):
+                        pass
+                    dirs[name] = d
+        except OSError:
+            pass
+
+        for r in rows:
+            did = r["delegation_id"]
+            seen.add(did)
+            parent = r["parent_session_id"] or ""
+            pchat = ""
+            if not parent:
+                pchat = _thread_from_origin(r["origin_session"] or "")
+                parent = _session_for_thread(prof, pchat) if pchat else ""
+            tasks = _tasks_from_manifest(dirs.get(did) or {})
+            goals = []
+            if r["task_json"]:
+                try:
+                    tj = json.loads(r["task_json"])
+                    goals = [g for g in (tj.get("goals") or []) if isinstance(g, str)]
+                except ValueError:
+                    pass
+            items.append({
+                "kind": "subagent", "id": did, "profile": prof["name"],
+                "parent": parent, "parent_chat": pchat,
+                "state": SPAWN_STATES.get(r["state"], "unknown"),
+                "title": (goals or [tasks[0]["goal"] if tasks else did])[0],
+                "started": r["dispatched_at"] or 0, "completed": r["completed_at"] or 0,
+                "tasks": max(len(goals), len(tasks), 1), "has_log": bool(tasks),
+            })
+
+        # -- live dirs the ledger no longer remembers -------------------
+        for did, m in dirs.items():
+            if did in seen:
+                continue
+            tasks = _tasks_from_manifest(m)
+            items.append({
+                "kind": "subagent", "id": did, "profile": prof["name"],
+                "parent": "", "parent_chat": "",
+                "state": "done" if m.get("completed") else "unknown",
+                "title": tasks[0]["goal"] if tasks else did,
+                "started": _parse_ts(m.get("started") or ""),
+                "completed": _parse_ts(m.get("completed") or ""),
+                "tasks": max(len(tasks), 1), "has_log": bool(tasks),
+            })
+
+    # -- pi tasks (one shared dir; parents stamped by pi-task) ----------
+    try:
+        pdir = _pi_tasks_dir()
+        for name in sorted(os.listdir(pdir)):
+            if not (name.startswith("pi-") and name.endswith(".meta")):
+                continue
+            tid = name[:-5]
+            meta = _read_kv(os.path.join(pdir, name))
+            parent = meta.get("parent_session", "")
+            pchat = meta.get("parent_chat", "")
+            if not parent and pchat:
+                for prof in PROFILES:
+                    parent = _session_for_thread(prof, pchat)
+                    if parent:
+                        break
+            rc = None
+            if os.path.isfile(os.path.join(pdir, tid + ".status")):
+                try:
+                    with open(os.path.join(pdir, tid + ".status")) as f:
+                        rc = int(f.read().strip() or "0")
+                except (OSError, ValueError):
+                    rc = 1
+            items.append({
+                "kind": "pi", "id": tid, "profile": "default",
+                "parent": parent, "parent_chat": pchat,
+                "state": "running" if rc is None else ("done" if rc == 0 else "failed"),
+                "title": meta.get("title") or tid,
+                "started": _parse_ts(meta.get("created") or ""),
+                "completed": 0, "tasks": 1, "has_log": True, "rc": rc,
+            })
+    except OSError as e:
+        errors.append(f"pi tasks: {e}")
+
+    items.sort(key=lambda it: -(it.get("started") or 0))
+    return {"items": items, "errors": errors}
+
+
+def spawn_log(kind, sid, task, lines):
+    """Tail one spawned run's live log. Paths stay inside the two known
+    roots — the caller-supplied id is validated, never joined raw."""
+    lines = max(1, min(2000, lines or 400))
+    path = ""
+    if sid.startswith("pi-") and all(c.isalnum() or c == "-" for c in sid):
+        path = os.path.join(_pi_tasks_dir(), sid + ".log")
+    elif kind == "subagent" and sid.startswith("deleg_") and all(c.isalnum() or c == "_" for c in sid):
+        for prof in PROFILES:
+            cand = os.path.join(_live_dir_root(prof), sid, "task-%d.log" % max(0, task or 0))
+            if os.path.isfile(cand):
+                path = cand
+                break
+    if not path or not os.path.isfile(path):
+        return None
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        f.seek(max(0, size - 262144))
+        data = f.read().decode("utf-8", "replace")
+    return "\n".join(data.splitlines()[-lines:])
+
+
 # ---- mirror: relay atlas-originated messages into discord threads ----
 
 def _post_discord_message(channel_id: str, content: str, token: str):
@@ -744,6 +973,35 @@ class Handler(BaseHTTPRequestHandler):
                 query = (q.get("q") or [""])[0]
                 limit = int((q.get("limit") or ["40"])[0] or 40)
                 self._json(200, search_messages(query, limit))
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
+        if self.path.split("?")[0] == "/spawned":
+            if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
+                self._json(401, {"error": "unauthorized"})
+                return
+            try:
+                self._json(200, spawn_items())
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
+        if self.path.split("?")[0] == "/spawn-log":
+            if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
+                self._json(401, {"error": "unauthorized"})
+                return
+            try:
+                from urllib.parse import parse_qs, urlparse
+
+                q = parse_qs(urlparse(self.path).query)
+                sid = (q.get("id") or [""])[0]
+                kind = (q.get("kind") or [""])[0]
+                task = int((q.get("task") or ["0"])[0] or 0)
+                lines = int((q.get("lines") or ["400"])[0] or 400)
+                text = spawn_log(kind, sid, task, lines)
+                if text is None:
+                    self._json(404, {"error": "no log"})
+                    return
+                self._json(200, {"text": text})
             except Exception as e:
                 self._json(500, {"error": str(e)})
             return

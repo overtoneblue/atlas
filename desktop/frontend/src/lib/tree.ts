@@ -3,10 +3,11 @@
 //    with nothing to show drop out entirely)
 //  · folded containers stay visible but hide their children (the stale pass
 //    ignores folds; folds apply afterwards)
-//  · empty containers never render
+//  · spawned work (subagent runs, pi tasks) nests as child rows directly
+//    under its parent chat, state glyph included
 // Keys are stable name paths (parent/child) so folds survive tree refreshes.
 
-import type { HubNode, Row, Session } from "./types";
+import type { HubNode, Row, Session, SpawnItem } from "./types";
 
 export const STALE_S = 7 * 24 * 3600; // seconds
 
@@ -21,7 +22,14 @@ export type TreeCtx = {
   collapsed: Set<string>;
   hideStale: boolean;
   now: number;
+  spawned: Record<string, SpawnItem[]>;
 };
+
+function spawnLabel(it: SpawnItem): string {
+  const t = (it.title || it.id).replace(/\s+/g, " ").trim();
+  const short = t.length > 64 ? t.slice(0, 61) + "…" : t;
+  return (it.kind === "pi" ? "pi · " : "subagent · ") + short;
+}
 
 export function buildRows(
   sections: HubNode[],
@@ -35,7 +43,16 @@ export function buildRows(
     if (node.kind === "post") {
       total += 1;
       if (ctx.hideStale && isStale(node, ctx.now)) return { rows: [], hidden: 1 };
-      return { rows: [{ node, key, depth }], hidden: 0 };
+      const out: Row[] = [{ node, key, depth }];
+      const spawns = node.session_id ? ctx.spawned[node.session_id] : undefined;
+      for (const it of spawns ?? []) {
+        out.push({
+          node: { kind: "spawn", name: spawnLabel(it), spawn: it },
+          key: key + "/#" + it.id,
+          depth: depth + 1,
+        });
+      }
+      return { rows: out, hidden: 0 };
     }
     const kids = node.children ?? [];
     let kidRows: Row[] = [];

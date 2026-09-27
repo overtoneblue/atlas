@@ -468,8 +468,42 @@ button {
   color: var(--red);
 }
 
+.statusbar .hint,
 .statusbar .ver {
   color: var(--faint);
+}
+
+/* ------- spawned work rows ------- */
+
+.row.spawn .label {
+  color: var(--dim2);
+}
+
+.row.spawn .tail {
+  color: var(--faint);
+}
+
+.row.spawn.sel .label {
+  color: var(--fg-hi);
+}
+
+/* ------- live log view (spawned runs) ------- */
+
+.logview .logtext pre {
+  margin: 0;
+  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.logview .log-foot {
+  flex: none;
+  padding: 6px 18px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
 }
 
 /* ------- live turns ------- */
