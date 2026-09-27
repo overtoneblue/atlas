@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "1.0.0-dev"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "1.0.0-dev",
+			"CompanyName": "overtoneblue",
+			"FileDescription": "Atlas — workstream client for Hermes",
+			"LegalCopyright": "© 2026, My Company",
+			"ProductName": "Atlas",
+			"Comments": "This is a comment"
+		}
+	}
+}

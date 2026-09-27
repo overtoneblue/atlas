@@ -34,10 +34,22 @@
         };
       });
 
-      devShells = forAllSystems (system: {
-        default = nixpkgs.legacyPackages.${system}.mkShell {
-          packages = [ nixpkgs.legacyPackages.${system}.go nixpkgs.legacyPackages.${system}.gnumake ];
-        };
-      });
+      devShells = forAllSystems (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
+          default = pkgs.mkShell {
+            packages = [ pkgs.go pkgs.gnumake ];
+          };
+
+          # Desktop (Wails v3) build environment: GTK4 + WebKitGTK 6.0,
+          # pkg-config wiring, node for the frontend, go-task for wails3.
+          desktop = pkgs.mkShell {
+            nativeBuildInputs = [ pkgs.pkg-config ];
+            buildInputs = [ pkgs.gtk4 pkgs.webkitgtk_6_0 ];
+            packages = [ pkgs.go pkgs.gcc pkgs.nodejs_22 pkgs.go-task ];
+          };
+        });
     };
 }
