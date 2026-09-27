@@ -53,6 +53,39 @@ Development (without nix):
 $ go build -o atlas . && ./atlas
 ```
 
+## Desktop app (app v2)
+
+`desktop/` is the v2 client: a real desktop app (Wails v3 + Svelte 5) with the
+same Discord-shaped IA (categories → channels → posts) and the same vim
+grammar — now owned end-to-end, Discord not required. The TUI above remains
+the lightweight companion.
+
+```console
+$ nix build .#atlas-desktop         # GTK4 + WebKitGTK build of desktop/
+$ ./result/bin/atlas-desktop
+
+$ nix build .#atlas-desktop-server  # the same UI as a plain HTTP server
+$ ./result/bin/atlas-desktop-server # listens on 127.0.0.1:8080
+```
+
+Both binaries embed the frontend bundle (`desktop/frontend/dist`), built
+hermetically from the pinned npm cache in the flake. The Go bindings under
+`desktop/frontend/bindings/` are committed; regenerate and re-commit them
+through the dev loop whenever the Go bridge changes:
+
+```console
+$ nix develop .#desktop -c bash -c 'export PATH="$HOME/go/bin:$PATH"; cd desktop && task build'
+$ scripts/preview-window.sh /tmp/atlas.png    # headless render → PNG (Xvfb)
+$ scripts/kbd-smoke.sh                        # synthetic-key end-to-end check
+```
+
+- `ATLAS_GPU=ondemand|always` opts the webview into hardware acceleration;
+  the default is software rendering (safe on every driver, NVIDIA included).
+- `--open <session-id>` boots straight into one conversation.
+- Credentials/URLs follow the same contract as the TUI (`ATLAS_API_URL`,
+  `ATLAS_HUB_URL`, `ATLAS_API_KEY`; `~/.config/atlas/env`).
+- Design + roadmap: `docs/PLAN-app-v2.md`.
+
 ## Live mode
 
 Atlas finds its API credentials in this order:

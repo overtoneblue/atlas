@@ -4,6 +4,8 @@ import (
 	"embed"
 	"flag"
 	"log"
+	"os"
+	"strings"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -47,9 +49,30 @@ func main() {
 		},
 		BackgroundColour: application.NewRGB(13, 11, 10),
 		URL:              "/",
+		Linux: application.LinuxWindow{
+			// WebKitGTK rendering policy. Software rendering is the safe
+			// default: it is what headless previews run on (llvmpipe) and it
+			// dodges the driver white-screen class of bugs the Wails default
+			// already guards against. Opt into hardware acceleration
+			// per-machine with ATLAS_GPU=ondemand|always.
+			WebviewGpuPolicy: gpuPolicy(),
+		},
 	})
 
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// gpuPolicy maps ATLAS_GPU to the WebKitGTK hardware-acceleration policy.
+// Unset or unrecognized values stay on software rendering.
+func gpuPolicy() application.WebviewGpuPolicy {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("ATLAS_GPU"))) {
+	case "always":
+		return application.WebviewGpuPolicyAlways
+	case "ondemand", "on_demand", "on-demand":
+		return application.WebviewGpuPolicyOnDemand
+	default:
+		return application.WebviewGpuPolicyNever
 	}
 }

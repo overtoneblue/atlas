@@ -15,7 +15,8 @@ set -euo pipefail
 OUT="${1:-/tmp/atlas-window.png}"
 SETTLE="${2:-8}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$ROOT/desktop/bin/atlas-desktop"
+# ATLAS_BIN overrides the binary under test (e.g. a `nix build` result).
+BIN="${ATLAS_BIN:-$ROOT/desktop/bin/atlas-desktop}"
 
 if [[ ! -x "$BIN" ]]; then
   echo "preview-window: $BIN not found — build it first:" >&2
