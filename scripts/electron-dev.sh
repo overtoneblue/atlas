@@ -11,9 +11,12 @@ if [ ! -x "$BIN" ]; then
   nix shell nixpkgs#go -c bash -c "cd \"$ROOT\" && CGO_ENABLED=0 go build -o \"$BIN\" ./cmd/atlasd"
 fi
 
-for p in 8642 8643; do
+# 8645 relays head's atlasd (images + paste inbox); ATLAS_UPSTREAM tells
+# this daemon where to reach it.
+export ATLAS_UPSTREAM="${ATLAS_UPSTREAM:-http://127.0.0.1:8645}"
+for p in 8642 8643 8645; do
   if ! timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$p" 2>/dev/null; then
-    echo "warning: 127.0.0.1:$p not answering — head tunnel up? (ssh -N -L $p:127.0.0.1:$p head)" >&2
+    echo "warning: 127.0.0.1:$p not answering — tunnel up? run scripts/tunnel.sh" >&2
   fi
 done
 

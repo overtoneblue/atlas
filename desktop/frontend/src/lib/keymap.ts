@@ -1,7 +1,8 @@
-// The vim key router. One capture-phase listener on window; a modal state
-// machine (NORMAL / INSERT) + a focus stack (tree / chat / composer).
-// This is the same design that shipped in the TUI's chatnav work — the
-// actions differ per pane, the grammar doesn't.
+// The vim key router. One capture-phase listener on window; modal branches
+// (help overlay → find bar → composer INSERT → visual selection → NORMAL)
+// + a focus stack (tree / chat / composer). Counts (`3j`) accumulate in
+// NORMAL and consume on the next motion. Actions live in state.svelte.ts;
+// this file owns grammar only.
 
 import { s, actions } from "./state.svelte";
 
@@ -22,6 +23,40 @@ function hasSelection(): boolean {
 
 function onKey(e: KeyboardEvent) {
   const key = e.key;
+
+  // Help overlay: ? or esc closes; nothing else acts while it's up.
+  if (s.helpOpen) {
+    if (key === "?" || key === "Escape") {
+      e.preventDefault();
+      actions.closeHelp();
+    }
+    return;
+  }
+
+  // Find bar: the real <input> owns typing; we own the verbs.
+  if (s.findOpen) {
+    if (key === "Escape") {
+      e.preventDefault();
+      actions.findClose();
+      return;
+    }
+    if (key === "Enter") {
+      e.preventDefault();
+      actions.findAccept();
+      return;
+    }
+    if (key === "ArrowDown") {
+      e.preventDefault();
+      actions.findNext(1);
+      return;
+    }
+    if (key === "ArrowUp") {
+      e.preventDefault();
+      actions.findNext(-1);
+      return;
+    }
+    return; // everything else (typing, backspace, paste) flows to the input
+  }
 
   // Composer insert mode: let typing through, intercept only the
   // escape hatches. Enter sends, Shift+Enter is a newline.
@@ -51,6 +86,15 @@ function onKey(e: KeyboardEvent) {
     return;
   }
 
+  // Counts: leading digits accumulate (3j, 12k). The next key consumes them.
+  if (/^[1-9]$/.test(key) || (key === "0" && s.pendingCount > 0)) {
+    e.preventDefault();
+    s.pendingCount = Math.min(999, s.pendingCount * 10 + Number(key));
+    return;
+  }
+  const n = s.pendingCount || 1;
+  s.pendingCount = 0;
+
   if (e.ctrlKey && !e.metaKey) {
     if (key === "c") {
       if (s.live && !hasSelection()) {
@@ -61,12 +105,12 @@ function onKey(e: KeyboardEvent) {
     }
     if (key === "d") {
       e.preventDefault();
-      actions.scrollChat(10);
+      actions.scrollChat(10 * n);
       return;
     }
     if (key === "u") {
       e.preventDefault();
-      actions.scrollChat(-10);
+      actions.scrollChat(-10 * n);
       return;
     }
     if (key === "Enter") {
@@ -77,16 +121,50 @@ function onKey(e: KeyboardEvent) {
     return; // let other ctrl chords pass (devtools etc.)
   }
 
+  // Visual selection: motions extend, y yanks, esc cancels.
+  if (s.visual) {
+    switch (key) {
+      case "j":
+      case "ArrowDown":
+        e.preventDefault();
+        actions.visualMove(n);
+        return;
+      case "k":
+      case "ArrowUp":
+        e.preventDefault();
+        actions.visualMove(-n);
+        return;
+      case "g":
+        e.preventDefault();
+        actions.visualMove(-1e6);
+        return;
+      case "G":
+        e.preventDefault();
+        actions.visualMove(1e6);
+        return;
+      case "y":
+        e.preventDefault();
+        void actions.visualYank();
+        return;
+      case "Escape":
+        e.preventDefault();
+        actions.visualCancel();
+        return;
+      default:
+        return; // everything else is inert while selecting
+    }
+  }
+
   switch (key) {
     case "j":
     case "ArrowDown":
       e.preventDefault();
-      actions.move(1);
+      actions.move(n);
       break;
     case "k":
     case "ArrowUp":
       e.preventDefault();
-      actions.move(-1);
+      actions.move(-n);
       break;
     case "g":
       e.preventDefault();
@@ -113,6 +191,34 @@ function onKey(e: KeyboardEvent) {
       if (s.focus === "composer") void actions.send();
       else actions.enter();
       break;
+    case "/":
+      e.preventDefault();
+      actions.findStart();
+      break;
+    case "n":
+      e.preventDefault();
+      actions.findNext(1);
+      break;
+    case "N":
+      e.preventDefault();
+      actions.findNext(-1);
+      break;
+    case "v":
+      e.preventDefault();
+      actions.visualStart(false);
+      break;
+    case "V":
+      e.preventDefault();
+      actions.visualStart(true);
+      break;
+    case "r":
+      e.preventDefault();
+      actions.toggleReasoning();
+      break;
+    case "?":
+      e.preventDefault();
+      actions.toggleHelp();
+      break;
     case ".":
     case ",":
       e.preventDefault();
@@ -130,11 +236,11 @@ function onKey(e: KeyboardEvent) {
       break;
     case "PageDown":
       e.preventDefault();
-      actions.scrollChat(20);
+      actions.scrollChat(20 * n);
       break;
     case "PageUp":
       e.preventDefault();
-      actions.scrollChat(-20);
+      actions.scrollChat(-20 * n);
       break;
     default:
       break;

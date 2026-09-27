@@ -62,6 +62,8 @@ func main() {
 	mux.HandleFunc("GET /api/messages", api.messages)
 	mux.HandleFunc("POST /api/send", api.send)
 	mux.HandleFunc("POST /api/stop", api.stop)
+	mux.HandleFunc("POST /api/attach", api.attach)
+	mux.HandleFunc("GET /media", api.media)
 	mux.HandleFunc("GET /api/events", api.events)
 
 	if web := resolveWebDir(*webDir); web != "" {
@@ -136,9 +138,9 @@ func (a *api) messages(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) send(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Profile string `json:"profile"`
-		Session string `json:"session"`
-		Text    string `json:"text"`
+		Profile string          `json:"profile"`
+		Session string          `json:"session"`
+		Message json.RawMessage `json:"message"` // string or content-parts array
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, errors.New("bad request body"))
@@ -148,7 +150,7 @@ func (a *api) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("profile and session are required"))
 		return
 	}
-	switch err := a.svc.SendMessage(req.Profile, req.Session, req.Text); {
+	switch err := a.svc.SendMessage(req.Profile, req.Session, req.Message); {
 	case err == nil:
 		writeJSON(w, map[string]bool{"ok": true})
 	case errors.Is(err, daemon.ErrEmpty):

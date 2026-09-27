@@ -29,14 +29,23 @@ type ChatEvent struct {
 	Interrupted bool   `json:"interrupted"`
 }
 
+// TextInput wraps plain text as the raw JSON the chat endpoints accept.
+// They also take multimodal content-part arrays ({"type":"text"} /
+// {"type":"image_url"} — native vision payloads); those pass through raw.
+func TextInput(text string) json.RawMessage {
+	b, _ := json.Marshal(text)
+	return b
+}
+
 // ChatStream runs one agent turn over SSE, invoking onEvent per event.
+// input is the raw JSON `input` value: a string, or a content-parts array.
 // It returns when the stream ends (done event / EOF / error / ctx cancel).
-func (c *Client) ChatStream(ctx context.Context, profile, sessionID, input string, onEvent func(ChatEvent)) error {
+func (c *Client) ChatStream(ctx context.Context, profile, sessionID string, input json.RawMessage, onEvent func(ChatEvent)) error {
 	key := c.KeyFor(profile)
 	if key == "" {
 		return fmt.Errorf("no API key configured for profile %q", profile)
 	}
-	body, err := json.Marshal(map[string]string{"input": input})
+	body, err := json.Marshal(map[string]json.RawMessage{"input": input})
 	if err != nil {
 		return err
 	}

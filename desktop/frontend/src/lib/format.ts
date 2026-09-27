@@ -23,16 +23,40 @@ function esc(x: string): string {
   return x.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function escAttr(x: string): string {
+  return esc(x).replace(/"/g, "&quot;");
+}
+
+function imgHTML(src: string, alt: string): string {
+  return `<img class="mdimg" src="${escAttr(src)}" alt="${escAttr(alt)}" loading="lazy" />`;
+}
+
 export function mdLite(src: string | undefined): string {
   if (!src) return "";
   const blocks: string[] = [];
+  const stash = (html: string) => {
+    blocks.push(html);
+    return `\u0000${blocks.length - 1}\u0000`;
+  };
   // escape first; placeholders use \u0000 so user text can't spoof them
   let s = esc(src);
-  s = s.replace(/```([\w+-]*)\n([\s\S]*?)```/g, (_m, _lang, code: string) => {
-    blocks.push(`<pre class="code"><code>${code.replace(/\n$/, "")}</code></pre>`);
-    return `\u0000${blocks.length - 1}\u0000`;
+  s = s.replace(/```([\w+-]*)\n([\s\S]*?)```/g, (_m, _lang, code: string) =>
+    stash(`<pre class="code"><code>${code.replace(/\n$/, "")}</code></pre>`),
+  );
+  s = s.replace(/`([^`\n]+)`/g, (_m, code: string) => stash(`<code class="ic">${code}</code>`));
+  // images: markdown ![](url) first, then MEDIA:<path> refs served by
+  // atlasd's relay. Both go through the stash so later passes can't
+  // corrupt their attributes, and they must run before the link passes
+  // (which would otherwise eat the [..](..) part and leave stray "!").
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt: string, url: string) =>
+    stash(imgHTML(url, alt)),
+  );
+  s = s.replace(/\bMEDIA:(?:"([^"]+)"|(\S+))/g, (m, quoted: string | undefined, bare: string | undefined) => {
+    const path = (quoted ?? bare ?? "").replace(/[),;:]+$/, "");
+    if (path === "" || path[0] !== "/") return m;
+    const name = path.split("/").pop() || "image";
+    return stash(imgHTML(`/media?path=${encodeURIComponent(path)}`, name));
   });
-  s = s.replace(/`([^`\n]+)`/g, "<code class=\"ic\">$1</code>");
   s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, "$1<em>$2</em>");
   s = s.replace(

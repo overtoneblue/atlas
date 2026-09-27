@@ -1,5 +1,5 @@
 // transport-wails: the original Wails v3 bindings transport. Kept until
-// the Wails shell is retired; selected only when window._wails is present.
+// the Wails shell is retired; selected only for `--mode wails*` builds.
 
 import { DataService } from "../../bindings/atlas/desktop";
 import { Events } from "@wailsio/runtime";
@@ -25,12 +25,19 @@ export async function GetMessages(
   return (await DataService.GetMessages(profile, sessionID, limit)) as unknown as Message[];
 }
 
+// The legacy Wails core speaks text only; content parts flatten to their
+// text (image parts are dropped — this shell is frozen until retirement).
 export async function SendMessage(
   profile: string,
   sessionID: string,
-  text: string,
+  message: string | unknown[],
 ): Promise<void> {
-  await DataService.SendMessage(profile, sessionID, text);
+  await DataService.SendMessage(profile, sessionID, flatten(message));
+}
+
+// No image relay on the legacy shell.
+export async function AttachImage(_dataUrl: string): Promise<string> {
+  return "";
 }
 
 export async function StopTurn(sessionID: string): Promise<void> {
@@ -48,4 +55,15 @@ export function subscribeTurn(onEvent: (ev: TurnEvent) => void): () => void {
       onEvent(data);
     }
   });
+}
+
+function flatten(message: string | unknown[]): string {
+  if (typeof message === "string") return message;
+  return message
+    .map((p) => {
+      const part = p as { type?: string; text?: string };
+      return part?.type === "text" ? (part.text ?? "") : "";
+    })
+    .filter(Boolean)
+    .join("\n");
 }

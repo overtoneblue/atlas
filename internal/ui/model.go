@@ -704,7 +704,7 @@ func (m *Model) beginTurn(text string) tea.Cmd {
 	c := m.client
 	go func() {
 		defer close(ch)
-		err := c.ChatStream(ctx, profile, id, text, func(ev hermes.ChatEvent) {
+		err := c.ChatStream(ctx, profile, id, hermes.TextInput(text), func(ev hermes.ChatEvent) {
 			select {
 			case ch <- ev:
 			case <-ctx.Done():

@@ -2,13 +2,22 @@
   import { onMount } from "svelte";
   import { s, actions } from "../state.svelte";
   import { mdLite, timeHM, toolGlyph, firstLine } from "../format";
+  import { findRuntime } from "../find";
 
   let scroller = $state<HTMLDivElement | null>(null);
+  let findInput = $state<HTMLInputElement | null>(null);
   let stick = true;
+  // Live DOM ranges for the current query. Component-local + non-reactive
+  // by design: ranges are DOM objects, and only the count/current index
+  // need to live in app state.
+  let ranges: Range[] = [];
 
   onMount(() => {
     actions.registerChatScroller(scroller);
-    return () => actions.registerChatScroller(null);
+    return () => {
+      actions.registerChatScroller(null);
+      clearPaint();
+    };
   });
 
   $effect(() => {
@@ -17,6 +26,103 @@
     if (!scroller) return;
     if (stick) queueMicrotask(() => scroller?.scrollTo({ top: scroller.scrollHeight }));
   });
+
+  // ---- find: DOM range engine (query/cursor live in state) -------------
+
+  $effect(() => {
+    findRuntime.recompute = recompute;
+    findRuntime.goto = goto;
+    return () => {
+      findRuntime.recompute = null;
+      findRuntime.goto = null;
+    };
+  });
+
+  $effect(() => {
+    // recompute on query change or transcript swap
+    void s.findQuery;
+    void s.messages;
+    void s.open?.id;
+    recompute();
+  });
+
+  $effect(() => {
+    // repaint current-match when navigation moves
+    void s.findCur;
+    paintCur();
+  });
+
+  $effect(() => {
+    if (s.findOpen && findInput) findInput.focus();
+  });
+
+  function collectTexts(root: Element): Text[] {
+    const out: Text[] = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) out.push(node as Text);
+    return out;
+  }
+
+  function recompute() {
+    ranges = [];
+    const q = s.findQuery.trim().toLowerCase();
+    if (scroller && q) {
+      for (const el of scroller.querySelectorAll<HTMLElement>("[data-mi]")) {
+        for (const node of collectTexts(el)) {
+          const text = node.data.toLowerCase();
+          for (let i = text.indexOf(q); i !== -1; i = text.indexOf(q, i + q.length)) {
+            const r = new Range();
+            r.setStart(node, i);
+            r.setEnd(node, i + q.length);
+            ranges.push(r);
+          }
+        }
+      }
+    }
+    s.findCount = ranges.length;
+    if (s.findCur >= ranges.length) s.findCur = 0;
+    paintAll();
+  }
+
+  function hlAPI(): { HL: unknown; css: { highlights?: { set(k: string, h: unknown): void; delete(k: string): void } } } | null {
+    const HL = (window as unknown as { Highlight?: unknown }).Highlight;
+    const css = CSS as unknown as { highlights?: { set(k: string, h: unknown): void; delete(k: string): void } };
+    if (!HL || !css?.highlights) return null;
+    return { HL, css };
+  }
+
+  function paintAll() {
+    const api = hlAPI();
+    if (!api) return; // older engines: counter still works
+    api.css.highlights!.set("atlas-find", new (api.HL as new (...r: Range[]) => unknown)(...ranges));
+    paintCur();
+  }
+
+  function paintCur() {
+    const api = hlAPI();
+    if (!api) return;
+    const cur = ranges[s.findCur];
+    if (cur) api.css.highlights!.set("atlas-find-cur", new (api.HL as new (...r: Range[]) => unknown)(cur));
+    else api.css.highlights!.delete("atlas-find-cur");
+  }
+
+  function clearPaint() {
+    const api = hlAPI();
+    if (!api) return;
+    api.css.highlights!.delete("atlas-find");
+    api.css.highlights!.delete("atlas-find-cur");
+  }
+
+  function goto(i: number) {
+    const r = ranges[i];
+    if (!r || !scroller) return;
+    const rr = r.getBoundingClientRect();
+    const cr = scroller.getBoundingClientRect();
+    scroller.scrollTop += rr.top - cr.top - cr.height / 3;
+  }
+
+  // ---- visuals ----------------------------------------------------------
 
   function onScroll() {
     if (!scroller) return;
@@ -29,6 +135,13 @@
   };
   const authorColor = () =>
     (s.open?.profile ?? "default") === "debbie" ? "var(--purple)" : "var(--yellow)";
+
+  function inVisual(i: number): boolean {
+    if (!s.visual) return false;
+    const a = Math.min(s.visualAnchor, s.visualCur);
+    const b = Math.max(s.visualAnchor, s.visualCur);
+    return i >= a && i <= b;
+  }
 </script>
 
 <div
@@ -41,24 +154,69 @@
       <span class="title">{s.open.title}</span>
       <span class="dim">{s.open.id}</span>
     </div>
+    {#if s.findOpen}
+      <div class="findbar">
+        <span class="fmark">/</span>
+        <input
+          bind:this={findInput}
+          value={s.findQuery}
+          oninput={(e) => actions.findSetQuery((e.target as HTMLInputElement).value)}
+          placeholder="search transcript — enter jumps · esc closes · n/N after"
+          spellcheck="false"
+          autocomplete="off"
+        />
+        <span class="fcount">
+          {s.findQuery
+            ? s.findCount
+              ? `${s.findCur + 1} / ${s.findCount}`
+              : "0 matches"
+            : ""}
+        </span>
+      </div>
+    {/if}
     <div class="scroller" bind:this={scroller} onscroll={onScroll}>
       {#if s.loadingOpen && s.messages.length === 0}
         <div class="pad dim">loading…</div>
       {/if}
-      {#each s.messages as m (m.id)}
+      {#each s.messages as m, i (m.id)}
         {#if m.tool_name}
-          <div class="tool">
+          <div class="tool" data-mi={i} class:vs={inVisual(i)}>
             <span class="tname">{toolGlyph(m.tool_name)} {m.tool_name}</span>
             <span class="snip">{firstLine(m.content)}</span>
           </div>
         {:else if m.role === "user"}
-          <div class="msg user"><span class="bar"></span><span class="body">{m.content}</span></div>
+          <div
+            class="msg user"
+            data-mi={i}
+            class:vs={inVisual(i)}
+            class:vcur={s.visual && i === s.visualCur}
+          >
+            <span class="bar"></span>
+            <div class="col">
+              {#if m.images?.length}
+                <div class="imgs">
+                  {#each m.images as u}
+                    <img class="mdimg" src={u} alt="" />
+                  {/each}
+                </div>
+              {/if}
+              {#if m.content}<div class="body">{@html mdLite(m.content)}</div>{/if}
+            </div>
+          </div>
         {:else}
-          <div class="msg agent">
+          <div
+            class="msg agent"
+            data-mi={i}
+            class:vs={inVisual(i)}
+            class:vcur={s.visual && i === s.visualCur}
+          >
             <div class="head">
               <span class="who" style={`color:${authorColor()}`}>{authorName()}</span>
               <span class="time">{timeHM(m.timestamp)}</span>
             </div>
+            {#if s.showReasoning && m.reasoning}
+              <div class="reason">{@html mdLite(m.reasoning)}</div>
+            {/if}
             <div class="body">{@html mdLite(m.content)}</div>
           </div>
         {/if}
@@ -90,7 +248,7 @@
   {:else}
     <div class="empty">
       <div class="big">◆ atlas</div>
-      <div class="dim">select a workstream · j/k move · enter open</div>
+      <div class="dim">select a workstream · j/k move · enter open · ? help</div>
     </div>
   {/if}
 </div>

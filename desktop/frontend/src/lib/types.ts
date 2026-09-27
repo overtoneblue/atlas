@@ -40,6 +40,9 @@ export type Message = {
   tool_calls?: { function?: { name?: string; arguments?: string } }[] | null;
   reasoning: string;
   timestamp: number;
+  // data URLs of pasted images on locally-echoed user messages (echo only;
+  // history re-renders from MEDIA: refs via atlasd's /media relay)
+  images?: string[];
 };
 
 export type Status = {

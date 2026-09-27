@@ -208,7 +208,7 @@ func (d *DataService) runTurn(ctx context.Context, turn *activeTurn, sessionID, 
 		log.Printf("atlas:turn done session=%s deltas=%d chars=%d", sessionID, deltas, chars)
 	}()
 
-	err := d.api.ChatStream(ctx, turn.profile, sessionID, text, func(ev hermes.ChatEvent) {
+	err := d.api.ChatStream(ctx, turn.profile, sessionID, hermes.TextInput(text), func(ev hermes.ChatEvent) {
 		switch ev.Event {
 		case "run.started":
 			if ev.RunID != "" {

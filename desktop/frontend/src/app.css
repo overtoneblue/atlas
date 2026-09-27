@@ -518,3 +518,247 @@ button {
 ::-webkit-scrollbar-thumb:hover {
   background: #2e2721;
 }
+
+/* ------- find ------- */
+
+.findbar {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface2);
+}
+
+.findbar .fmark {
+  color: var(--yellow);
+  font-weight: 600;
+}
+
+.findbar input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg-hi);
+  font: inherit;
+  padding: 0;
+}
+
+.findbar input::placeholder {
+  color: var(--faint);
+}
+
+.findbar .fcount {
+  color: var(--dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+::highlight(atlas-find) {
+  background-color: #3a3229;
+  color: var(--fg-hi);
+}
+
+::highlight(atlas-find-cur) {
+  background-color: var(--yellow);
+  color: #000;
+}
+
+/* ------- visual selection ------- */
+
+.msg.vs {
+  background: rgba(170, 149, 109, 0.07);
+  box-shadow: inset 2px 0 0 var(--yellow);
+}
+
+.msg.vs.vcur {
+  background: rgba(170, 149, 109, 0.14);
+}
+
+.tool.vs {
+  background: rgba(170, 149, 109, 0.05);
+}
+
+/* ------- images ------- */
+
+.msg .col {
+  min-width: 0;
+}
+
+.msg .imgs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 6px;
+}
+
+.mdimg {
+  display: block;
+  max-width: min(420px, 100%);
+  max-height: 320px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  margin: 6px 0;
+}
+
+.msg .imgs .mdimg {
+  margin: 0;
+}
+
+/* ------- reasoning ------- */
+
+.reason {
+  color: var(--dim2);
+  font-size: 12px;
+  border-left: 2px solid var(--faint);
+  padding: 2px 10px;
+  margin: 4px 0;
+  white-space: pre-wrap;
+}
+
+.msg .reason pre.code,
+.msg .body pre.code.in-reason {
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+
+.msg .reason pre.code code {
+  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--fg);
+}
+
+/* ------- composer chips ------- */
+
+.composer .cstack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.composer .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 2px 2px;
+}
+
+.composer .chip {
+  position: relative;
+}
+
+.composer .chip img {
+  height: 44px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  display: block;
+}
+
+.composer .chip .x {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface2);
+  color: var(--fg);
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* ------- help overlay ------- */
+
+.help-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.help {
+  width: min(680px, 92vw);
+  max-height: 82vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px 22px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.help .hhead {
+  color: var(--fg-hi);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-bottom: 12px;
+}
+
+.help .hhead .dim {
+  font-weight: 400;
+  margin-left: 8px;
+}
+
+.help .hsec {
+  margin-bottom: 14px;
+}
+
+.help .htitle {
+  color: var(--yellow);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.help .hrow {
+  display: flex;
+  gap: 14px;
+}
+
+.help .hk {
+  flex: none;
+  width: 210px;
+  color: var(--fg);
+  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-size: 12px;
+}
+
+.help .hd {
+  color: var(--dim2);
+}
+
+/* ------- statusbar additions ------- */
+
+.statusbar .badge.count {
+  color: var(--fg-hi);
+  border-color: var(--fg-hi);
+}
+
+.statusbar .badge.find {
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+
+.statusbar .badge.vis {
+  color: var(--orange);
+  border-color: var(--orange);
+}
+
+.statusbar .badge.help {
+  color: var(--cyan);
+  border-color: var(--cyan);
+}

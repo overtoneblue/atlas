@@ -7,6 +7,7 @@
   import Transcript from "./lib/components/Transcript.svelte";
   import Composer from "./lib/components/Composer.svelte";
   import StatusBar from "./lib/components/StatusBar.svelte";
+  import Help from "./lib/components/Help.svelte";
 
   onMount(() => {
     const uninstall = installKeymap();
@@ -28,4 +29,5 @@
     <Composer />
   </main>
   <StatusBar />
+  <Help />
 </div>

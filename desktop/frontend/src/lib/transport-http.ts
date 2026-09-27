@@ -1,4 +1,4 @@
-// transport-http: atlasd's HTTP + SSE transport — the ones shells
+// transport-http: atlasd's HTTP + SSE transport — the one shells
 // (Electron, browser, phone) use.
 //
 // Same-origin in production: the shell loads this UI from atlasd itself, so
@@ -34,6 +34,16 @@ async function post(path: string, body: unknown): Promise<void> {
   if (!res.ok) throw new Error(await errText(res));
 }
 
+async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errText(res));
+  return (await res.json()) as T;
+}
+
 export async function Status(): Promise<StatusT> {
   return get("/api/status");
 }
@@ -55,12 +65,21 @@ export async function GetMessages(
   return get(`/api/messages?${q}`);
 }
 
+// message is either plain text or a content-parts array (text + image_url
+// parts) — a native vision payload the Hermes API understands.
 export async function SendMessage(
   profile: string,
   sessionID: string,
-  text: string,
+  message: string | unknown[],
 ): Promise<void> {
-  return post("/api/send", { profile, session: sessionID, text });
+  return post("/api/send", { profile, session: sessionID, message });
+}
+
+// AttachImage persists a pasted image on the daemon side and returns its
+// path; the path rides the turn as a MEDIA: ref so history re-renders it.
+export async function AttachImage(dataUrl: string): Promise<string> {
+  const r = await postJSON<{ path?: string }>("/api/attach", { data: dataUrl });
+  return r.path ?? "";
 }
 
 export async function StopTurn(sessionID: string): Promise<void> {

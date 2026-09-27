@@ -1,7 +1,8 @@
 // Central app state — Svelte 5 runes. ALL mutations flow through `actions`;
 // components only read `s` and call actions. Ports the TUI's behaviors:
 // stale-stows, folds, unread tracking, vim focus model — plus the v2 live
-// turn machine (streamed deltas + tool activity, stop support).
+// turn machine (streamed deltas + tool activity, stop support) and the
+// parity layer (find, visual/yank, counts, image paste).
 
 import type {
   Focus,
@@ -15,6 +16,7 @@ import type {
 } from "./types";
 import * as api from "./api";
 import { buildRows, buildSessionRows } from "./tree";
+import { findRuntime } from "./find";
 
 const LS_STALE = "atlas.hideStale";
 const LS_READ = "atlas.lastRead";
@@ -48,6 +50,20 @@ export const s = $state({
   draft: "",
   lastRead: loadRead(),
   autoScroll: 0, // bumped to force a scroll-to-bottom
+  // find (transcript search; DOM ranges live in the Transcript component)
+  findOpen: false,
+  findQuery: "",
+  findCount: 0,
+  findCur: 0,
+  // visual selection (message-index range)
+  visual: false,
+  visualAnchor: 0,
+  visualCur: 0,
+  // parity toggles
+  helpOpen: false,
+  showReasoning: false,
+  pendingCount: 0, // vim count prefix (3j)
+  attachments: [] as string[], // pasted images awaiting send (data URLs)
 });
 
 let chatScroller: HTMLDivElement | null = null;
@@ -215,6 +231,9 @@ export const actions = {
     if (!id) return;
     s.open = { profile, id, title: node.name };
     s.loadingOpen = true;
+    s.visual = false;
+    s.findOpen = false;
+    s.pendingCount = 0;
     this.markRead(id);
     try {
       const msgs = await api.GetMessages(profile, id, 400);
@@ -243,10 +262,153 @@ export const actions = {
     }
   },
 
+  // ---- find (transcript search) ---------------------------------------
+
+  findStart() {
+    if (!s.open) {
+      s.statusText = "open a workstream to search";
+      return;
+    }
+    s.findOpen = true;
+    s.findQuery = "";
+    s.findCount = 0;
+    s.findCur = 0;
+    s.pendingCount = 0;
+    s.visual = false;
+  },
+
+  findSetQuery(q: string) {
+    s.findQuery = q;
+    s.findCur = 0;
+    findRuntime.recompute?.();
+    if (s.findCount > 0) findRuntime.goto?.(0);
+  },
+
+  findAccept() {
+    s.findOpen = false;
+    if (s.findQuery && s.findCount > 0) {
+      findRuntime.goto?.(s.findCur);
+      s.statusText = `match ${s.findCur + 1}/${s.findCount} — n/N step`;
+    } else {
+      s.statusText = s.findQuery ? "no matches" : "";
+    }
+  },
+
+  findClose() {
+    s.findOpen = false;
+    if (s.findQuery) s.statusText = `search: ${s.findQuery} · n/N step`;
+  },
+
+  findNext(dir: number) {
+    if (!s.findQuery) {
+      s.statusText = "no search — press / first";
+      return;
+    }
+    if (!s.findCount) findRuntime.recompute?.();
+    if (!s.findCount) {
+      s.statusText = "no matches";
+      return;
+    }
+    const n = s.findCount;
+    s.findCur = ((s.findCur + dir) % n + n) % n;
+    findRuntime.goto?.(s.findCur);
+    s.statusText = `match ${s.findCur + 1}/${n}`;
+  },
+
+  // ---- visual mode -----------------------------------------------------
+
+  visualStart(all: boolean) {
+    if (!s.open || !s.messages.length) {
+      s.statusText = "nothing to select";
+      return;
+    }
+    s.findOpen = false;
+    s.visual = true;
+    if (all) {
+      s.visualAnchor = 0;
+      s.visualCur = s.messages.length - 1;
+      s.statusText = `visual: whole conversation (${s.messages.length}) — y yank · esc cancel`;
+    } else {
+      const i = topVisibleMessage();
+      s.visualAnchor = i;
+      s.visualCur = i;
+      s.statusText = "visual — j/k extend · y yank · esc cancel";
+    }
+    scrollRowIntoView(s.visualCur, "nearest");
+  },
+
+  visualMove(delta: number) {
+    if (!s.visual) return;
+    const n = s.messages.length;
+    s.visualCur = Math.max(0, Math.min(n - 1, s.visualCur + delta));
+    scrollRowIntoView(s.visualCur, "nearest");
+  },
+
+  visualCancel() {
+    s.visual = false;
+    s.statusText = "";
+  },
+
+  async visualYank() {
+    if (!s.visual) return;
+    const a = Math.min(s.visualAnchor, s.visualCur);
+    const b = Math.max(s.visualAnchor, s.visualCur);
+    const lines: string[] = [];
+    for (let i = a; i <= b; i++) {
+      const m = s.messages[i];
+      if (!m || m.tool_name || !m.content?.trim()) continue;
+      lines.push(`${roleName(m.role)}: ${m.content.trim()}`);
+    }
+    const text = lines.join("\n\n");
+    s.visual = false;
+    if (!text) {
+      s.statusText = "nothing to yank";
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      s.statusText = `yanked ${lines.length} messages · ${text.length} chars`;
+    } catch {
+      fallbackClipboard(text);
+      s.statusText = `yanked ${lines.length} messages (fallback copy)`;
+    }
+  },
+
+  // ---- parity toggles --------------------------------------------------
+
+  toggleHelp() {
+    s.helpOpen = !s.helpOpen;
+  },
+
+  closeHelp() {
+    s.helpOpen = false;
+  },
+
+  toggleReasoning() {
+    s.showReasoning = !s.showReasoning;
+    s.statusText = s.showReasoning ? "reasoning shown" : "reasoning hidden";
+  },
+
+  addAttachment(dataUrl: string) {
+    if (!dataUrl.startsWith("data:image/")) return;
+    if (s.attachments.length >= 4) {
+      s.statusText = "max 4 images per message";
+      return;
+    }
+    s.attachments = s.attachments.concat([dataUrl]);
+    s.statusText = `image attached (${s.attachments.length}) — enter sends`;
+  },
+
+  removeAttachment(i: number) {
+    s.attachments = s.attachments.filter((_, k) => k !== i);
+  },
+
   // ---- live turns ------------------------------------------------------
 
   // send echoes the user message locally, then fires the turn; deltas and
-  // lifecycle arrive on "atlas:turn" events.
+  // lifecycle arrive on "atlas:turn" events. Attached images ride as
+  // native vision parts; they're also persisted on the head side (best
+  // effort) and referenced as MEDIA: lines so history re-renders them.
   async send() {
     if (!s.open) return;
     if (s.turnBusy[s.open.id]) {
@@ -254,10 +416,24 @@ export const actions = {
       return;
     }
     const text = s.draft.trim();
-    if (!text) return;
+    const imgs = s.attachments.slice();
+    if (!text && !imgs.length) return;
     const open = s.open;
     const echoID = -Date.now();
     s.draft = "";
+    s.attachments = [];
+
+    let paths: string[] = [];
+    if (imgs.length) {
+      try {
+        paths = await Promise.all(imgs.map((u) => api.AttachImage(u)));
+      } catch {
+        paths = []; // vision parts still deliver the images
+      }
+    }
+    const refs = paths.filter(Boolean).map((p) => `MEDIA:${p}`);
+    const wireText = [text, ...refs].filter((x) => x && x.length).join("\n\n");
+
     s.messages = s.messages.concat([
       {
         id: echoID,
@@ -266,15 +442,28 @@ export const actions = {
         tool_name: "",
         reasoning: "",
         timestamp: Date.now() / 1000,
+        images: imgs.length ? imgs : undefined,
       },
     ]);
     s.autoScroll += 1;
+
+    // Wire shape: plain string, or content parts when images are attached.
+    const payload: string | unknown[] = imgs.length
+      ? [
+          ...(wireText ? [{ type: "text", text: wireText }] : []),
+          ...imgs.map((u) => ({ type: "image_url", image_url: { url: u } })),
+        ]
+      : wireText;
+
     try {
-      await api.SendMessage(open.profile, open.id, text);
-      s.statusText = "streaming…";
+      await api.SendMessage(open.profile, open.id, payload);
+      s.statusText = imgs.length
+        ? `sent with ${imgs.length} image(s) — streaming…`
+        : "streaming…";
     } catch (e: unknown) {
       s.messages = s.messages.filter((m) => m.id !== echoID);
       s.draft = text;
+      s.attachments = imgs;
       s.statusText = "send failed: " + errText(e);
     }
   },
@@ -398,6 +587,18 @@ export const actions = {
   },
 
   escape() {
+    if (s.helpOpen) {
+      s.helpOpen = false;
+      return;
+    }
+    if (s.visual) {
+      s.visual = false;
+      return;
+    }
+    if (s.findOpen) {
+      s.findOpen = false;
+      return;
+    }
     if (s.focus === "composer") {
       if (s.mode === "INSERT") {
         s.mode = "NORMAL";
@@ -429,4 +630,42 @@ function errText(e: unknown): string {
   if (typeof e === "string") return e;
   const m = (e as { message?: string }).message;
   return m ?? String(e);
+}
+
+// The topmost visibly-fully-or-partially message row: the anchor for `v`.
+function topVisibleMessage(): number {
+  if (!chatScroller) return 0;
+  const cr = chatScroller.getBoundingClientRect();
+  for (const el of chatScroller.querySelectorAll<HTMLElement>("[data-mi]")) {
+    if (el.getBoundingClientRect().bottom >= cr.top + 8) {
+      return Number(el.dataset.mi ?? 0);
+    }
+  }
+  return Math.max(0, s.messages.length - 1);
+}
+
+function scrollRowIntoView(i: number, block: ScrollLogicalPosition = "center") {
+  const el = document.querySelector<HTMLElement>(`[data-mi="${i}"]`);
+  el?.scrollIntoView({ block, behavior: "auto" });
+}
+
+function roleName(role: string): string {
+  if (role === "user") return "Caden";
+  const p = s.open?.profile ?? "default";
+  return p === "default" ? "Nolan" : p.charAt(0).toUpperCase() + p.slice(1);
+}
+
+function fallbackClipboard(text: string) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand("copy");
+  } catch {
+    /* nothing left to try */
+  }
+  ta.remove();
 }

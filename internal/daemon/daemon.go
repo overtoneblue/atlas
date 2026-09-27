@@ -12,7 +12,9 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"strings"
@@ -175,14 +177,15 @@ func (d *Service) GetMessages(profile, sessionID string, limit int) ([]hermes.Me
 	return d.api.Messages(ctx, profile, sessionID, limit)
 }
 
-// SendMessage starts one agent turn asynchronously. Deltas and lifecycle
-// updates stream back on the event channel as they arrive; the call returns
-// immediately.
-func (d *Service) SendMessage(profile, sessionID, text string) error {
+// SendMessage starts one agent turn asynchronously. input is the raw JSON
+// `input` the chat endpoint accepts: a plain string, or a content-parts
+// array (text + image_url — native vision). Deltas and lifecycle updates
+// stream back on the event channel; the call returns immediately.
+func (d *Service) SendMessage(profile, sessionID string, input json.RawMessage) error {
 	if !d.api.ConfiguredFor(profile) {
 		return errors.New("no API key for profile " + profile)
 	}
-	if strings.TrimSpace(text) == "" {
+	if emptyInput(input) {
 		return ErrEmpty
 	}
 
@@ -197,8 +200,29 @@ func (d *Service) SendMessage(profile, sessionID, text string) error {
 	d.mu.Unlock()
 
 	d.emit(TurnEvent{Kind: "started", SessionID: sessionID, Profile: profile})
-	go d.runTurn(ctx, turn, sessionID, text)
+	go d.runTurn(ctx, turn, sessionID, input)
 	return nil
+}
+
+// emptyInput rejects null / blank-string / empty-array payloads.
+func emptyInput(input json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(input)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return true
+	}
+	switch trimmed[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err == nil && strings.TrimSpace(s) == "" {
+			return true
+		}
+	case '[':
+		var arr []json.RawMessage
+		if err := json.Unmarshal(trimmed, &arr); err == nil && len(arr) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // StopTurn asks the API server to interrupt the session's in-flight run.
@@ -253,7 +277,7 @@ func (d *Service) stopRun(profile, runID string) error {
 }
 
 // runTurn consumes the SSE stream from the API server, relaying each event.
-func (d *Service) runTurn(ctx context.Context, turn *activeTurn, sessionID, text string) {
+func (d *Service) runTurn(ctx context.Context, turn *activeTurn, sessionID string, input json.RawMessage) {
 	defer func() {
 		d.mu.Lock()
 		delete(d.turns, sessionID)
@@ -263,7 +287,7 @@ func (d *Service) runTurn(ctx context.Context, turn *activeTurn, sessionID, text
 		log.Printf("atlas:turn done session=%s deltas=%d chars=%d", sessionID, deltas, chars)
 	}()
 
-	err := d.api.ChatStream(ctx, turn.profile, sessionID, text, func(ev hermes.ChatEvent) {
+	err := d.api.ChatStream(ctx, turn.profile, sessionID, input, func(ev hermes.ChatEvent) {
 		switch ev.Event {
 		case "run.started":
 			if ev.RunID != "" {
