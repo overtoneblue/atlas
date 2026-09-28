@@ -17,10 +17,14 @@ export async function GetSessions(limit: number): Promise<Session[]> {
   return (await DataService.GetSessions(limit)) as unknown as Session[];
 }
 
+// The legacy Wails shell is frozen until retirement: the new paging
+// params (offset/order) are accepted for interface parity and ignored.
 export async function GetMessages(
   profile: string,
   sessionID: string,
   limit: number,
+  _offset = 0,
+  _order: "latest" | "oldest" = "latest",
 ): Promise<Message[]> {
   return (await DataService.GetMessages(profile, sessionID, limit)) as unknown as Message[];
 }

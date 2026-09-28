@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"atlas/internal/daemon"
+	"atlas/internal/hermes"
 )
 
 func main() {
@@ -156,7 +157,16 @@ func (a *api) messages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	msgs, err := a.svc.GetMessages(profile, session, limit)
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	// Tail-first by default: the UI reads the newest page up front, then
+	// pages back with offset for older history. order=oldest keeps the
+	// forward read for anything that wants it.
+	msgs, err := a.svc.GetMessages(profile, session, hermes.MessageQuery{
+		Limit:            limit,
+		Offset:           offset,
+		Latest:           q.Get("order") != "oldest",
+		IncludeCompacted: q.Get("include_compacted") == "1",
+	})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return

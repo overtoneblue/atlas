@@ -149,6 +149,8 @@
   function onScroll() {
     if (!scroller) return;
     stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    // near the top: page in older history (tail-first reads live in state)
+    if (scroller.scrollTop < 240) void actions.loadOlder();
   }
 
   const authorName = () => {
@@ -164,12 +166,23 @@
     const b = Math.max(s.visualAnchor, s.visualCur);
     return i >= a && i <= b;
   }
+
+  // Pane-level click: transcript images open the zoom preview; anywhere
+  // else just takes focus.
+  function onPaneClick(e: MouseEvent) {
+    const el = e.target instanceof Element ? e.target.closest(".mdimg") : null;
+    if (el instanceof HTMLImageElement) {
+      actions.openLightbox(el.src, el.alt, el);
+      return;
+    }
+    actions.setFocus("chat");
+  }
 </script>
 
 <div
   class="pane chat"
   class:focused={s.focus === "chat"}
-  onclick={() => actions.setFocus("chat")}
+  onclick={onPaneClick}
 >
   {#if s.open}
     <div class="chat-head">
@@ -199,6 +212,9 @@
     <div class="scroller" bind:this={scroller} onscroll={onScroll}>
       {#if s.loadingOpen && s.messages.length === 0}
         <div class="pad dim">loading…</div>
+      {/if}
+      {#if s.loadingOlder}
+        <div class="pad dim">loading older…</div>
       {/if}
       {#each s.messages as m, i (m.id)}
         {#if m.tool_name}

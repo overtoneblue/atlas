@@ -4,7 +4,7 @@
 // NORMAL and consume on the next motion. Actions live in state.svelte.ts;
 // this file owns grammar only.
 
-import { s, actions } from "./state.svelte";
+import { s, actions, paletteVisible } from "./state.svelte";
 
 export function installKeymap(): () => void {
   window.addEventListener("keydown", onKey, true);
@@ -23,6 +23,16 @@ function hasSelection(): boolean {
 
 function onKey(e: KeyboardEvent) {
   const key = e.key;
+
+  // Image preview: esc (or q, vim-style) closes; nothing else acts while
+  // it's up. The Lightbox plays its reverse-FLIP close.
+  if (s.lightbox) {
+    if (key === "Escape" || key === "q") {
+      e.preventDefault();
+      actions.dismissLightbox();
+    }
+    return;
+  }
 
   // Help overlay: ? or esc closes; nothing else acts while it's up.
   if (s.helpOpen) {
@@ -61,6 +71,31 @@ function onKey(e: KeyboardEvent) {
   // Composer insert mode: let typing through, intercept only the
   // escape hatches. Enter sends, Shift+Enter is a newline.
   if (s.focus === "composer" && s.mode === "INSERT") {
+    // Command palette: while the draft is a bare "/suffix", arrows pick,
+    // enter/tab run, esc dismisses. Typing flows through untouched.
+    if (paletteVisible()) {
+      if (key === "ArrowDown" || (e.ctrlKey && key === "n")) {
+        e.preventDefault();
+        actions.paletteMove(1);
+        return;
+      }
+      if (key === "ArrowUp" || (e.ctrlKey && key === "p")) {
+        e.preventDefault();
+        actions.paletteMove(-1);
+        return;
+      }
+      if ((key === "Enter" && !e.shiftKey) || key === "Tab") {
+        e.preventDefault();
+        actions.runPalette();
+        return;
+      }
+      if (key === "Escape") {
+        e.preventDefault();
+        actions.paletteDismiss();
+        return;
+      }
+      return;
+    }
     if (key === "Escape") {
       e.preventDefault();
       actions.escape();

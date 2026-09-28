@@ -186,17 +186,20 @@ func (d *Service) GetSessions(limit int) ([]hermes.Session, error) {
 	return d.api.ListSessions(ctx, limit)
 }
 
-// GetMessages reads one conversation's transcript.
-func (d *Service) GetMessages(profile, sessionID string, limit int) ([]hermes.Message, error) {
+// GetMessages reads one conversation's transcript page.
+func (d *Service) GetMessages(profile, sessionID string, q hermes.MessageQuery) ([]hermes.Message, error) {
 	if !d.api.ConfiguredFor(profile) {
 		return nil, errors.New("no API key for profile " + profile)
 	}
-	if limit <= 0 || limit > 2000 {
-		limit = 400
+	if q.Limit <= 0 || q.Limit > 2000 {
+		q.Limit = 400
+	}
+	if q.Offset < 0 {
+		q.Offset = 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return d.api.Messages(ctx, profile, sessionID, limit)
+	return d.api.MessagesPage(ctx, profile, sessionID, q)
 }
 
 // SendMessage starts one agent turn asynchronously. input is the raw JSON

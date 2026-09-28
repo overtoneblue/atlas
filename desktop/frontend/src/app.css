@@ -353,6 +353,7 @@ button {
 /* ------- composer ------- */
 
 .composer {
+  position: relative;
   flex: none;
   display: flex;
   align-items: flex-end;
@@ -635,10 +636,93 @@ button {
   border-radius: 6px;
   border: 1px solid var(--line);
   margin: 6px 0;
+  cursor: zoom-in;
 }
 
 .msg .imgs .mdimg {
   margin: 0;
+}
+
+/* ------- command palette ------- */
+
+.palette {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: calc(100% + 8px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px;
+  z-index: 45;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+.prow {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.prow.sel {
+  background: rgba(170, 149, 109, 0.14);
+}
+
+.pname {
+  color: var(--yellow);
+  font-weight: 600;
+}
+
+.pdesc {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.phint {
+  padding: 6px 10px 4px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+/* ------- image preview (lightbox) ------- */
+
+.lb-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 70;
+  cursor: zoom-out;
+  animation: lbfade 150ms ease-out;
+}
+
+.lb-img {
+  max-width: 92vw;
+  max-height: 92vh;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.7);
+  will-change: transform;
+}
+
+@keyframes lbfade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lb-scrim {
+    animation: none;
+  }
 }
 
 /* ------- reasoning ------- */

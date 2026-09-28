@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -176,11 +177,38 @@ func (c *Client) ListSessions(ctx context.Context, limit int) ([]Session, error)
 	return out.Data, nil
 }
 
+// MessageQuery shapes one transcript read. Latest pages back from the
+// newest message (the API returns each page in chronological order);
+// IncludeCompacted widens the read to compaction-archived display history
+// so a client can scroll past the last compaction boundary.
+type MessageQuery struct {
+	Limit            int
+	Offset           int
+	Latest           bool
+	IncludeCompacted bool
+}
+
 func (c *Client) Messages(ctx context.Context, profile, id string, limit int) ([]Message, error) {
+	return c.MessagesPage(ctx, profile, id, MessageQuery{Limit: limit})
+}
+
+// MessagesPage reads one transcript page (see MessageQuery).
+func (c *Client) MessagesPage(ctx context.Context, profile, id string, q MessageQuery) ([]Message, error) {
 	var out struct {
 		Data []Message `json:"data"`
 	}
-	u := fmt.Sprintf("%s%s/api/sessions/%s/messages?limit=%d", c.BaseURL, apiPath(profile, ""), url.PathEscape(id), limit)
+	params := url.Values{}
+	params.Set("limit", strconv.Itoa(q.Limit))
+	if q.Offset > 0 {
+		params.Set("offset", strconv.Itoa(q.Offset))
+	}
+	if q.Latest {
+		params.Set("order", "latest")
+	}
+	if q.IncludeCompacted {
+		params.Set("include_compacted", "1")
+	}
+	u := fmt.Sprintf("%s%s/api/sessions/%s/messages?%s", c.BaseURL, apiPath(profile, ""), url.PathEscape(id), params.Encode())
 	if err := c.get(ctx, u, c.KeyFor(profile), &out); err != nil {
 		return nil, err
 	}

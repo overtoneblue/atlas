@@ -19,6 +19,7 @@ import type {
 import * as api from "./api";
 import { buildRows, buildSessionRows } from "./tree";
 import { findRuntime } from "./find";
+import { tick } from "svelte";
 
 const LS_STALE = "atlas.hideStale";
 const LS_READ = "atlas.lastRead";
@@ -71,9 +72,27 @@ export const s = $state({
   spawned: {} as Record<string, SpawnItem[]>,
   // the live-log viewer (one spawned run), null when hidden
   logView: null as { item: SpawnItem } | null,
+  // transcript paging: tail-first reads load the newest page up front and
+  // offset pages back through older history (incl. compaction-archived
+  // display rows once the head endpoint supports include_compacted)
+  olderOffset: 0,
+  olderExhausted: false,
+  loadingOlder: false,
+  // image zoom preview (click a transcript image)
+  lightbox: null as { src: string; alt: string } | null,
+  // command palette (composer "/" affordance)
+  paletteIdx: 0,
+  paletteDismissed: null as string | null,
 });
 
 let chatScroller: HTMLDivElement | null = null;
+let lightboxOriginEl: HTMLElement | null = null;
+
+// The Lightbox registers its animated close here so keymap dismissals play
+// the same reverse-FLIP; the fallback is an instant unmount.
+export const lightboxRuntime: { close: (() => void) | null } = { close: null };
+
+const MSG_PAGE = 400;
 
 function cleanMessages(ms: Message[]): Message[] {
   return ms
@@ -290,9 +309,12 @@ export const actions = {
     s.pendingCount = 0;
     this.markRead(id);
     try {
-      const msgs = await api.GetMessages(profile, id, 400);
+      const msgs = await api.GetMessages(profile, id, MSG_PAGE, 0, "latest");
       if (s.open?.id !== id) return; // navigated away mid-flight
       s.messages = cleanMessages(msgs);
+      s.olderOffset = msgs.length;
+      s.olderExhausted = msgs.length < MSG_PAGE;
+      s.paletteDismissed = null;
       s.statusText = `${s.messages.length} messages · ${id}`;
     } catch (e: unknown) {
       s.messages = [];
@@ -307,12 +329,44 @@ export const actions = {
     const open = s.open;
     if (!open) return;
     try {
-      const msgs = await api.GetMessages(open.profile, open.id, 400);
+      const msgs = await api.GetMessages(open.profile, open.id, MSG_PAGE, 0, "latest");
       if (s.open?.id !== open.id) return;
       s.messages = cleanMessages(msgs);
+      s.olderOffset = msgs.length;
+      s.olderExhausted = msgs.length < MSG_PAGE;
       s.autoScroll += 1;
     } catch {
       /* keep the current transcript on refresh failure */
+    }
+  },
+
+  // loadOlder pages back through history (offset paging from the tail).
+  // The prepend grows the transcript at the top, so we restore the scroll
+  // anchor once the DOM lands: scrollTop shifts by the height delta and
+  // the view never jumps.
+  async loadOlder() {
+    const open = s.open;
+    if (!open || s.loadingOlder || s.olderExhausted || s.loadingOpen) return;
+    s.loadingOlder = true;
+    const el = chatScroller;
+    const prevH = el?.scrollHeight ?? 0;
+    const prevTop = el?.scrollTop ?? 0;
+    try {
+      const msgs = await api.GetMessages(open.profile, open.id, MSG_PAGE, s.olderOffset, "latest");
+      if (s.open?.id !== open.id) return; // navigated away mid-flight
+      s.olderOffset += msgs.length;
+      if (msgs.length < MSG_PAGE) s.olderExhausted = true;
+      const have = new Set(s.messages.map((m) => m.id));
+      const older = cleanMessages(msgs).filter((m) => !have.has(m.id));
+      if (older.length) {
+        s.messages = [...older, ...s.messages];
+        await tick();
+        if (el) el.scrollTop = prevTop + (el.scrollHeight - prevH);
+      }
+    } catch (e: unknown) {
+      s.statusText = "older messages failed: " + errText(e);
+    } finally {
+      s.loadingOlder = false;
     }
   },
 
@@ -685,7 +739,104 @@ export const actions = {
     }
     s.statusText = "";
   },
+
+  // ---- image preview ---------------------------------------------------
+
+  // Clicking a transcript image opens the centered zoom preview; the
+  // origin element feeds the FLIP open/close animation.
+  openLightbox(src: string, alt: string, origin: HTMLElement | null) {
+    lightboxOriginEl = origin;
+    s.lightbox = { src, alt };
+  },
+
+  // Animated dismissal: the Lightbox registers its reverse-FLIP close in
+  // lightboxRuntime; the fallback unmounts instantly (reduced motion,
+  // unmounted overlay).
+  dismissLightbox() {
+    if (s.lightbox && lightboxRuntime.close) lightboxRuntime.close();
+    else s.lightbox = null;
+  },
+
+  takeLightboxOrigin(): HTMLElement | null {
+    const el = lightboxOriginEl;
+    lightboxOriginEl = null;
+    return el;
+  },
+
+  closeLightbox() {
+    s.lightbox = null;
+  },
+
+  // ---- command palette -------------------------------------------------
+
+  paletteReset() {
+    s.paletteIdx = 0;
+  },
+
+  paletteMove(dir: number) {
+    const n = paletteMatches(s.draft).length;
+    if (!n) return;
+    s.paletteIdx = ((s.paletteIdx + dir) % n + n) % n;
+  },
+
+  paletteDismiss() {
+    s.paletteDismissed = s.draft;
+  },
+
+  runPalette() {
+    this.runPaletteAt(s.paletteIdx);
+  },
+
+  runPaletteAt(i: number) {
+    const cmds = paletteMatches(s.draft);
+    const c = cmds[Math.max(0, Math.min(i, cmds.length - 1))];
+    if (!c) return;
+    s.draft = "";
+    s.paletteIdx = 0;
+    s.paletteDismissed = null;
+    c.run();
+  },
 };
+
+// ---- command palette registry ----------------------------------------
+// Commands route through the same actions the keys use; names render with
+// a leading slash and the palette filters on the typed suffix.
+
+export interface Command {
+  name: string;
+  desc: string;
+  run: () => void;
+}
+
+export const COMMANDS: Command[] = [
+  { name: "/help", desc: "keys + commands sheet", run: () => actions.toggleHelp() },
+  { name: "/stop", desc: "stop the running turn", run: () => void actions.stopTurn() },
+  { name: "/reasoning", desc: "toggle reasoning blocks", run: () => actions.toggleReasoning() },
+  { name: "/find", desc: "search the open transcript", run: () => actions.findStart() },
+  { name: "/visual", desc: "start a selection at the top message", run: () => actions.visualStart(false) },
+  { name: "/refresh", desc: "reload the transcript from head", run: () => void actions.refreshTranscript() },
+  { name: "/stale", desc: "show/hide chats idle 7d+", run: () => actions.toggleStale() },
+  { name: "/top", desc: "jump to the oldest loaded message", run: () => actions.scrollChatTo("top") },
+  { name: "/bottom", desc: "jump to the newest message", run: () => actions.scrollChatTo("bottom") },
+];
+
+export function paletteMatches(draft: string): Command[] {
+  const m = /^\/([a-z]*)$/i.exec(draft);
+  if (!m) return [];
+  const f = m[1].toLowerCase();
+  return COMMANDS.filter((c) => c.name.slice(1).toLowerCase().startsWith(f));
+}
+
+// Visible while the composer draft is a bare "/suffix" (no arguments yet)
+// and not dismissed via esc for this exact draft.
+export function paletteVisible(): boolean {
+  return (
+    s.focus === "composer" &&
+    s.mode === "INSERT" &&
+    s.paletteDismissed !== s.draft &&
+    paletteMatches(s.draft).length > 0
+  );
+}
 
 function countPosts(sections: HubNode[]): number {
   let n = 0;

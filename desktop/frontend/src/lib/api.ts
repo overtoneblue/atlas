@@ -19,7 +19,9 @@ export const GetMessages = (
   profile: string,
   sessionID: string,
   limit: number,
-): Promise<Message[]> => t.GetMessages(profile, sessionID, limit);
+  offset = 0,
+  order: "latest" | "oldest" = "latest",
+): Promise<Message[]> => t.GetMessages(profile, sessionID, limit, offset, order);
 
 // message: plain text, or content parts (text + image_url) for vision.
 export const SendMessage = (

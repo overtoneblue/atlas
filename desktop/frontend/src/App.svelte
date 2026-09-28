@@ -9,6 +9,7 @@
   import StatusBar from "./lib/components/StatusBar.svelte";
   import Help from "./lib/components/Help.svelte";
   import LogView from "./lib/components/LogView.svelte";
+  import Lightbox from "./lib/components/Lightbox.svelte";
 
   onMount(() => {
     const uninstall = installKeymap();
@@ -37,4 +38,5 @@
   </main>
   <StatusBar />
   <Help />
+  <Lightbox />
 </div>

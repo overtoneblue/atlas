@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { s, actions } from "../state.svelte";
+  import { s, actions, COMMANDS } from "../state.svelte";
 
   const SECTIONS: { title: string; rows: [string, string][] }[] = [
     {
@@ -34,6 +34,7 @@
         ["/ n N in visual", "search mid-selection — the match extends it"],
         ["y", "yank selection to the real clipboard"],
         ["r", "toggle reasoning blocks"],
+        ["click an image", "zoom preview (esc or click closes)"],
       ],
     },
     {
@@ -43,6 +44,7 @@
         ["enter", "send"],
         ["shift+enter", "newline"],
         ["ctrl+v", "paste an image (up to 4, 4 MB each)"],
+        ["/ at the start", "command palette — autofill · ↑↓ · enter runs"],
         ["esc", "normal mode · back to tree"],
       ],
     },
@@ -52,6 +54,10 @@
         ["?", "this help"],
         ["ctrl+c", "stop the running turn (while streaming)"],
       ],
+    },
+    {
+      title: "commands",
+      rows: COMMANDS.map((c) => [c.name, c.desc] as [string, string]),
     },
   ];
 </script>

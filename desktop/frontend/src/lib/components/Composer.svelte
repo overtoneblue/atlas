@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { s, actions } from "../state.svelte";
+  import { s, actions, paletteMatches, paletteVisible } from "../state.svelte";
 
   let ta = $state<HTMLTextAreaElement | null>(null);
 
@@ -53,6 +53,23 @@
   onpaste={onPaste}
   role="presentation"
 >
+  {#if paletteVisible()}
+    <div class="palette">
+      {#each paletteMatches(s.draft) as c, i}
+        <div
+          class="prow"
+          class:sel={i === s.paletteIdx}
+          onmousedown={(e) => e.preventDefault()}
+          onclick={() => actions.runPaletteAt(i)}
+          role="presentation"
+        >
+          <span class="pname">{c.name}</span>
+          <span class="pdesc">{c.desc}</span>
+        </div>
+      {/each}
+      <div class="phint">↑↓ pick · enter run · esc dismiss</div>
+    </div>
+  {/if}
   <span class="cbadge">{s.focus === "composer" && s.mode === "INSERT" ? "INSERT" : "NORMAL"}</span>
   <div class="cstack">
     {#if s.attachments.length}
@@ -73,6 +90,7 @@
     <textarea
       bind:this={ta}
       bind:value={s.draft}
+      oninput={() => actions.paletteReset()}
       rows="1"
       spellcheck="false"
       placeholder={s.open

@@ -60,8 +60,16 @@ export async function GetMessages(
   profile: string,
   sessionID: string,
   limit: number,
+  offset = 0,
+  order: "latest" | "oldest" = "latest",
 ): Promise<Message[]> {
-  const q = `profile=${encodeURIComponent(profile)}&session=${encodeURIComponent(sessionID)}&limit=${limit}`;
+  // Tail-first reads: the newest page loads up front (order=latest pages
+  // back from the end), offset pages through older history — including
+  // compaction-archived display rows (include_compacted; the head API
+  // ignores it gracefully until its endpoint supports it).
+  const q =
+    `profile=${encodeURIComponent(profile)}&session=${encodeURIComponent(sessionID)}` +
+    `&limit=${limit}&offset=${offset}&order=${order}&include_compacted=1`;
   return get(`/api/messages?${q}`);
 }
 
