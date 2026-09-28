@@ -83,6 +83,8 @@
             version = "0.12.0";
             src = ./.;
 
+            subPackages = [ "." "./cmd/atlasd" ];
+
             vendorHash = "sha256-uwBJAqN4sIepiiJf9lCDumLqfKJEowQO2tOiSWD3Fig=";
 
             meta.mainProgram = "atlas";
