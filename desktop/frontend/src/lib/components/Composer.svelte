@@ -1,5 +1,6 @@
 <script lang="ts">
   import { s, actions, paletteMatches, paletteVisible } from "../state.svelte";
+  import { preLiftComposer } from "../mobile-viewport";
 
   let ta = $state<HTMLTextAreaElement | null>(null);
 
@@ -94,6 +95,9 @@
       bind:this={ta}
       bind:value={s.draft}
       oninput={() => actions.paletteReset()}
+      onfocus={() => actions.setFocus("composer")}
+      onmousedown={() => preLiftComposer()}
+      ontouchstart={() => preLiftComposer()}
       rows="1"
       spellcheck="false"
       placeholder={s.open

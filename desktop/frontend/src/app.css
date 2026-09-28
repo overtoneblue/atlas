@@ -499,6 +499,21 @@ button {
   color: var(--faint);
 }
 
+/* viewport debug readout (triple-tap the version) */
+.vpdbg {
+  position: fixed;
+  left: 6px;
+  bottom: 6px;
+  z-index: 9999;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #000d;
+  color: #7dff9b;
+  font: 10px/1.5 ui-monospace, monospace;
+  pointer-events: none;
+  white-space: pre;
+}
+
 /* ------- spawned work rows ------- */
 
 .row.spawn .label {
@@ -982,6 +997,13 @@ button {
     touch-action: manipulation;
   }
 
+  /* Non-scrollable chrome: a drag here must never pan/rubber-band the page
+     (iOS drags fixed bars around when it does). */
+  .chat-head,
+  .statusbar {
+    touch-action: none;
+  }
+
   .statusbar {
     gap: 8px;
     padding: 2px 10px calc(2px + env(safe-area-inset-bottom));
@@ -1001,9 +1023,13 @@ button {
   }
 
   .statusbar .badge.mode,
-  .statusbar .focus,
-  .statusbar .ver {
+  .statusbar .focus {
     display: none;
+  }
+
+  .statusbar .ver {
+    font-size: 10px;
+    flex: none;
   }
 
   .chat-head {

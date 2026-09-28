@@ -24,7 +24,11 @@ export default defineConfig(async ({ command, mode }) => {
       port: Number(wailsPort) || 9245,
       strictPort: true,
     },
-    define: { __ATLAS_WAILS__: JSON.stringify(isWails) },
+    define: {
+      __ATLAS_WAILS__: JSON.stringify(isWails),
+      // injected into the UI (status bar); set by the nix build
+      __ATLAS_VERSION__: JSON.stringify(proc?.env?.ATLAS_VERSION ?? "dev"),
+    },
     resolve: isWails
       ? {}
       : {
