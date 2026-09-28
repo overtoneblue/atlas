@@ -110,8 +110,17 @@
     ></textarea>
   </div>
   {#if s.open && s.turnBusy[s.open.id]}
-    <button class="stop" onclick={() => void actions.stopTurn()} title="stop turn (ctrl+c)">⏹</button>
+    <button
+      class="stop"
+      onmousedown={(e) => e.preventDefault()}
+      onclick={() => void actions.stopTurn()}
+      title="stop turn (ctrl+c)">⏹</button
+    >
   {:else}
-    <button onclick={() => void actions.send()} title="send (enter)">⏎</button>
+    <button
+      onmousedown={(e) => e.preventDefault()}
+      onclick={() => void actions.send()}
+      title="send (enter)">⏎</button
+    >
   {/if}
 </div>

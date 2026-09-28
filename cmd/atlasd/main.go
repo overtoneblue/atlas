@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -71,7 +72,7 @@ func main() {
 
 	if web := resolveWebDir(*webDir); web != "" {
 		log.Printf("atlasd: serving UI from %s", web)
-		mux.Handle("GET /", http.FileServer(http.Dir(web)))
+		mux.Handle("GET /", webCacheHeaders(http.FileServer(http.Dir(web))))
 	} else {
 		log.Printf("atlasd: no web UI found; serving API only")
 	}
@@ -281,6 +282,22 @@ func resolveWebDir(flagVal string) string {
 		}
 	}
 	return ""
+}
+
+// webCacheHeaders makes UI updates land on the next load everywhere:
+// vite-hashed assets are immutable, everything else (index.html, manifest,
+// icons) revalidates. Without this, browsers heuristically cache
+// index.html and a deployed update can sit invisible for hours (seen on
+// iOS home-screen apps).
+func webCacheHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // withLoopbackCORS lets loopback-only origins (the vite dev server) call

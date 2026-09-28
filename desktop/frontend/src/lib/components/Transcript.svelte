@@ -28,6 +28,18 @@
     return () => actions.registerChatScroller(null);
   });
 
+  // Keyboard open/close (or any scroller resize) while pinned to the bottom
+  // must keep the newest message and the composer in view — no jumps.
+  $effect(() => {
+    const el = scroller;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (stick) el.scrollTo({ top: el.scrollHeight });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
   $effect(() => {
     void s.autoScroll;
     void s.messages.length;

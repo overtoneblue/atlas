@@ -24,15 +24,23 @@
     const vv = window.visualViewport;
     const applyH = () => {
       if (mq.matches && vv) {
+        // iOS keyboard: the visual viewport shrinks (height) and may pan
+        // (offsetTop) to reveal the focused input — follow both.
         document.documentElement.style.setProperty("--app-h", `${Math.round(vv.height)}px`);
+        document.documentElement.style.setProperty("--app-oy", `${Math.round(vv.offsetTop)}px`);
+        if (window.scrollY !== 0) window.scrollTo(0, 0);
       } else {
         document.documentElement.style.removeProperty("--app-h");
+        document.documentElement.style.removeProperty("--app-oy");
       }
     };
     applyH();
     vv?.addEventListener("resize", applyH);
     vv?.addEventListener("scroll", applyH);
     mq.addEventListener("change", applyH);
+    // shrink/restore the instant focus moves, not on the first resize frame
+    document.addEventListener("focusin", applyH);
+    document.addEventListener("focusout", applyH);
 
     return () => {
       uninstall();
@@ -42,7 +50,10 @@
       vv?.removeEventListener("resize", applyH);
       vv?.removeEventListener("scroll", applyH);
       mq.removeEventListener("change", applyH);
+      document.removeEventListener("focusin", applyH);
+      document.removeEventListener("focusout", applyH);
       document.documentElement.style.removeProperty("--app-h");
+      document.documentElement.style.removeProperty("--app-oy");
     };
   });
 </script>

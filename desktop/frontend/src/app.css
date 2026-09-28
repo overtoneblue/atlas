@@ -39,14 +39,24 @@ body,
   height: 100%;
 }
 
+html,
 body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Full-viewport app surface: the document itself must never scroll — on
+   iOS that is what makes the page jump under the on-screen keyboard.
+   The app tracks the *visual* viewport instead (--app-h / --app-oy). */
+body {
+  position: fixed;
+  inset: 0;
   margin: 0;
   background: var(--bg);
   color: var(--fg);
   font-family: Inter, system-ui, -apple-system, sans-serif;
   font-size: 13px;
   line-height: 1.55;
-  overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -920,6 +930,8 @@ button {
     grid-template-areas:
       "main"
       "status";
+    /* iOS may pan the visual viewport to reveal the keyboard — follow it */
+    transform: translateY(var(--app-oy, 0px));
     padding-top: env(safe-area-inset-top);
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
