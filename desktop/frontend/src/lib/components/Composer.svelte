@@ -97,7 +97,6 @@
       oninput={() => actions.paletteReset()}
       onfocus={() => actions.setFocus("composer")}
       onmousedown={() => preLiftComposer()}
-      ontouchstart={() => preLiftComposer()}
       rows="1"
       spellcheck="false"
       placeholder={s.open

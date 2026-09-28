@@ -7,17 +7,20 @@
 //       standalone PWAs, where the page visibly jumps up and stays there.
 // Events for these are also unreliable in standalone mode. So this module:
 //
-//   1. PRE-LIFT — on composer mousedown/touchstart (both fire BEFORE iOS's
-//      pre-focus visibility check), move the composer to its keyboard-open
-//      position so Safari never decides it needs to scroll at all.
-//   2. FOLLOW — every tick, size/position the app surface from the visual
-//      viewport: height = closedH - keyboard, translated to follow offsetTop.
-//      Before any live signal arrives in a gesture, the remembered keyboard
-//      height keeps the pre-lift position stable.
+//   1. PRE-LIFT — on composer mousedown (fires after touchend but BEFORE
+//      iOS's pre-focus visibility check), move the composer to its
+//      keyboard-open position so Safari never decides to scroll. Timing at
+//      mousedown also means the lift lands right as the keyboard starts
+//      rising — no dead air where the composer hangs in mid-air.
+//   2. FOLLOW — every frame while anything is moving, size/position the app
+//      surface from the visual viewport: height = closedH - keyboard,
+//      translated to follow offsetTop. Before any live signal arrives in a
+//      gesture, the remembered keyboard height keeps the pre-lift stable.
 //   3. SNAP BACK — the mobile app surface is a fixed, non-scrolling
 //      document; any window.scrollY is an iOS artifact, so we undo it and
 //      express the same displacement as keyboard height instead.
-//   4. WATCHDOG — a 120 ms tick catches pans whose events iOS swallowed.
+//   4. WATCHDOG — a 120 ms tick (only while the rAF loop is idle) catches
+//      pans whose events iOS swallowed.
 
 const LS_KEY = "atlas.kbHeight";
 const DEFAULT_KB = 320; // first-run guess (iPhone portrait, Face ID, + QuickType)
@@ -46,8 +49,11 @@ function focusedEditable(): boolean {
   return !!af && (af.tagName === "TEXTAREA" || af.tagName === "INPUT");
 }
 
+// The running instance's frame-kicker (single install at a time).
+let kicker: (() => void) | null = null;
+
 /** Pre-lift the composer above where the keyboard will land. Call from
- *  mousedown/touchstart — both fire before iOS runs its visibility check,
+ *  mousedown — it fires before iOS runs the pre-focus visibility check,
  *  which is what makes this the only reliable prevention point. */
 export function preLiftComposer() {
   if (!window.matchMedia(MQ).matches) return;
@@ -59,30 +65,46 @@ export function preLiftComposer() {
   const closed = Math.max(vv.height, window.innerHeight);
   const h = Math.max(240, Math.round(closed - readKbCache()));
   document.documentElement.style.setProperty("--app-h", `${h}px`);
+  kicker?.();
 }
 
 export function installMobileViewport(): () => void {
   const mq = window.matchMedia(MQ);
   const vv = window.visualViewport;
   const root = document.documentElement.style;
+  const cls = document.documentElement.classList;
 
   let closedH = Math.round(vv?.height ?? window.innerHeight);
   let kbCache = readKbCache();
   let sawSignal = false; // a real keyboard signal arrived in this gesture
   let focusT = 0; // when an editable last gained focus
   let settle: ReturnType<typeof setTimeout> | undefined;
+  let lastH = "";
+  let lastOy = "";
+  let lastKbOpen = false;
 
   const apply = () => {
     if (!mq.matches || !vv) {
-      root.removeProperty("--app-h");
-      root.removeProperty("--app-oy");
+      if (lastH !== "off") {
+        root.removeProperty("--app-h");
+        root.removeProperty("--app-oy");
+        lastH = "off";
+        lastOy = "off";
+      }
+      if (lastKbOpen) {
+        cls.remove("kb-open");
+        lastKbOpen = false;
+      }
       return;
     }
     if (vv.scale > 1.02) {
       // pinch-zoom: just fit the visible height; keyboard math is
       // meaningless while scaled
-      root.setProperty("--app-h", `${Math.round(vv.height)}px`);
-      root.setProperty("--app-oy", "0px");
+      const zh = `${Math.round(vv.height)}px`;
+      if (zh !== lastH) {
+        root.setProperty("--app-h", zh);
+        lastH = zh;
+      }
       return;
     }
 
@@ -109,8 +131,24 @@ export function installMobileViewport(): () => void {
     if (!focused && kb <= 40 && winScroll === 0 && vvPan === 0) closedH = visH;
 
     const h = Math.max(240, Math.round(closedH - kb));
-    root.setProperty("--app-h", `${h}px`);
-    root.setProperty("--app-oy", `${vvPan}px`);
+    const nextH = `${h}px`;
+    const nextOy = `${vvPan}px`;
+    if (nextH !== lastH) {
+      root.setProperty("--app-h", nextH);
+      lastH = nextH;
+    }
+    if (nextOy !== lastOy) {
+      root.setProperty("--app-oy", nextOy);
+      lastOy = nextOy;
+    }
+
+    // While the keyboard is up, the home-indicator inset is covered by the
+    // keyboard — collapse it (CSS) so there is no black band above the keys.
+    const kbOpen = kb > 60;
+    if (kbOpen !== lastKbOpen) {
+      cls.toggle("kb-open", kbOpen);
+      lastKbOpen = kbOpen;
+    }
 
     // The app surface is a fixed, non-scrolling document — any window scroll
     // is an iOS keyboard artifact. Undo it; the height above already
@@ -131,36 +169,62 @@ export function installMobileViewport(): () => void {
     }
   };
 
+  // Frame-perfect tracking while anything is moving: keyboard animations run
+  // at ~60fps — a 120ms tick reads as stepping. The rAF loop runs while
+  // events keep arriving (each event extends the window) and stops ~450ms
+  // after the last one.
+  let raf = 0;
+  let rafUntil = 0;
+  const kick = () => {
+    rafUntil = Math.max(rafUntil, Date.now() + 450);
+    if (!raf) {
+      const loop = () => {
+        apply();
+        raf = Date.now() < rafUntil ? requestAnimationFrame(loop) : 0;
+      };
+      raf = requestAnimationFrame(loop);
+    }
+  };
+  kicker = kick;
+
   const onFocus = (e: FocusEvent) => {
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) {
       sawSignal = false;
       focusT = Date.now();
     }
-    apply();
+    kick();
   };
 
-  const tick = setInterval(apply, 120);
+  // Watchdog: catches pans/resizes whose events iOS swallowed. Skipped
+  // while the rAF loop is live (it is already applying every frame).
+  const tick = setInterval(() => {
+    if (!raf) apply();
+  }, 120);
   apply();
-  vv?.addEventListener("resize", apply);
-  vv?.addEventListener("scroll", apply);
-  window.addEventListener("scroll", apply, { passive: true });
+  vv?.addEventListener("resize", kick);
+  vv?.addEventListener("scroll", kick);
+  window.addEventListener("scroll", kick, { passive: true });
   window.addEventListener("focusin", onFocus);
   window.addEventListener("focusout", onFocus);
-  window.addEventListener("orientationchange", apply);
-  mq.addEventListener("change", apply);
+  window.addEventListener("orientationchange", kick);
+  mq.addEventListener("change", kick);
 
   return () => {
     clearInterval(tick);
     clearTimeout(settle);
-    vv?.removeEventListener("resize", apply);
-    vv?.removeEventListener("scroll", apply);
-    window.removeEventListener("scroll", apply);
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+    kicker = null;
+    vv?.removeEventListener("resize", kick);
+    vv?.removeEventListener("scroll", kick);
+    window.removeEventListener("scroll", kick);
     window.removeEventListener("focusin", onFocus);
     window.removeEventListener("focusout", onFocus);
-    window.removeEventListener("orientationchange", apply);
-    mq.removeEventListener("change", apply);
+    window.removeEventListener("orientationchange", kick);
+    mq.removeEventListener("change", kick);
     root.removeProperty("--app-h");
     root.removeProperty("--app-oy");
+    cls.remove("kb-open");
   };
 }

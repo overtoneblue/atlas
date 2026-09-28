@@ -1032,6 +1032,12 @@ button {
     flex: none;
   }
 
+  /* keyboard up: the home-indicator inset is covered by the keyboard —
+     collapse it so there is no black band above the keys */
+  .kb-open .statusbar {
+    padding-bottom: 2px;
+  }
+
   .chat-head {
     padding-left: 14px;
   }
