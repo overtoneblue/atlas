@@ -57,6 +57,7 @@
 <aside
   class="pane sidebar"
   class:focused={s.focus === "tree"}
+  class:open={s.navOpen}
   bind:this={el}
   onclick={() => actions.setFocus("tree")}
 >
@@ -71,6 +72,12 @@
         onclick={() => {
           actions.setFocus("tree");
           actions.clickRow(i);
+          if (
+            (r.node.kind === "post" && r.node.session_id) ||
+            (r.node.kind === "spawn" && r.node.spawn)
+          ) {
+            actions.closeNav();
+          }
         }}
       >
         <span class="glyph">{glyph(r)}</span>

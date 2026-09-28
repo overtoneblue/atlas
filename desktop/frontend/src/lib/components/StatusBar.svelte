@@ -1,9 +1,12 @@
 <script lang="ts">
-  import { s } from "../state.svelte";
+  import { s, actions } from "../state.svelte";
 </script>
 
 <div class="statusbar">
-  <span class="badge" class:insert={s.mode === "INSERT"}>{s.mode}</span>
+  <button class="mnav" onclick={() => actions.toggleNav()} title="workstreams">
+    ☰ workstreams{#if actions.unreadCount() > 0}<span class="mnav-n">{actions.unreadCount()}</span>{/if}
+  </button>
+  <span class="badge mode" class:insert={s.mode === "INSERT"}>{s.mode}</span>
   <span class="focus dim">{s.focus}</span>
   {#if s.pendingCount > 0}<span class="badge count">{s.pendingCount}</span>{/if}
   {#if s.findOpen}<span class="badge find">FIND</span>{/if}

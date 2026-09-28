@@ -66,6 +66,8 @@ export const s = $state({
   // parity toggles
   helpOpen: false,
   showReasoning: false,
+  // mobile: off-canvas workstreams drawer
+  navOpen: false,
   pendingCount: 0, // vim count prefix (3j)
   attachments: [] as string[], // pasted images awaiting send (data URLs)
   // spawned work: parent session id -> its subagent runs + pi tasks
@@ -259,6 +261,16 @@ export const actions = {
     s.logView = null;
     this.setFocus("tree");
     s.statusText = "";
+  },
+
+  // ---- mobile nav (off-canvas workstreams drawer) -----------------------
+
+  toggleNav() {
+    s.navOpen = !s.navOpen;
+  },
+
+  closeNav() {
+    if (s.navOpen) s.navOpen = false;
   },
 
   toggleFold(key: string) {

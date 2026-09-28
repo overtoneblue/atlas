@@ -3,6 +3,9 @@
 
   let ta = $state<HTMLTextAreaElement | null>(null);
 
+  // Phones: keep hints free of vim/desktop keybinds (touch only).
+  const coarse = window.matchMedia("(pointer: coarse)").matches;
+
   $effect(() => {
     const shouldFocus = s.focus === "composer" && s.mode === "INSERT";
     if (!ta) return;
@@ -95,9 +98,15 @@
       spellcheck="false"
       placeholder={s.open
         ? s.turnBusy[s.open.id]
-          ? "streaming…   ctrl+c stops the turn"
-          : "message…   enter sends · ctrl+v pastes images · esc normal"
-        : "open a workstream to chat"}
+          ? coarse
+            ? "streaming…"
+            : "streaming…   ctrl+c stops the turn"
+          : coarse
+            ? "message…"
+            : "message…   enter sends · ctrl+v pastes images · esc normal"
+        : coarse
+          ? "open a workstream first"
+          : "open a workstream to chat"}
     ></textarea>
   </div>
   {#if s.open && s.turnBusy[s.open.id]}

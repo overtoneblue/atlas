@@ -17,11 +17,32 @@
     void actions.boot();
     const treeTimer = setInterval(() => void actions.refreshTree(), 10000);
     const spawnTimer = setInterval(() => void actions.refreshSpawned(), 4000);
+
+    // Phones: track the visual viewport so the composer stays above the
+    // on-screen keyboard (iOS shrinks visualViewport, not the layout).
+    const mq = window.matchMedia("(max-width: 760px)");
+    const vv = window.visualViewport;
+    const applyH = () => {
+      if (mq.matches && vv) {
+        document.documentElement.style.setProperty("--app-h", `${Math.round(vv.height)}px`);
+      } else {
+        document.documentElement.style.removeProperty("--app-h");
+      }
+    };
+    applyH();
+    vv?.addEventListener("resize", applyH);
+    vv?.addEventListener("scroll", applyH);
+    mq.addEventListener("change", applyH);
+
     return () => {
       uninstall();
       uninstallTurns();
       clearInterval(treeTimer);
       clearInterval(spawnTimer);
+      vv?.removeEventListener("resize", applyH);
+      vv?.removeEventListener("scroll", applyH);
+      mq.removeEventListener("change", applyH);
+      document.documentElement.style.removeProperty("--app-h");
     };
   });
 </script>
@@ -38,5 +59,11 @@
   </main>
   <StatusBar />
   <Help />
+  <div
+    class="navscrim"
+    class:open={s.navOpen}
+    onclick={() => actions.closeNav()}
+    role="presentation"
+  ></div>
   <Lightbox />
 </div>

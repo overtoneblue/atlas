@@ -12,6 +12,9 @@
   // need to live in app state.
   let ranges: Range[] = [];
 
+  // Phones: touch-only hint text (no vim keybinds).
+  const coarse = window.matchMedia("(pointer: coarse)").matches;
+
   onMount(() => {
     return () => clearPaint();
   });
@@ -286,7 +289,7 @@
   {:else}
     <div class="empty">
       <div class="big">◆ atlas</div>
-      <div class="dim">select a workstream · j/k move · enter open · ? help</div>
+      <div class="dim">{coarse ? "tap ☰ workstreams to begin" : "select a workstream · j/k move · enter open · ? help"}</div>
     </div>
   {/if}
 </div>
