@@ -22,11 +22,13 @@
   onMount(() => {
     void pull();
     const timer = setInterval(() => void pull(), 2000);
+    return () => clearInterval(timer);
+  });
+
+  // Same bind:this timing fix as Transcript: register via effect, not onMount.
+  $effect(() => {
     actions.registerChatScroller(scroller);
-    return () => {
-      clearInterval(timer);
-      actions.registerChatScroller(null);
-    };
+    return () => actions.registerChatScroller(null);
   });
 
   $effect(() => {

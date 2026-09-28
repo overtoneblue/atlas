@@ -13,11 +13,16 @@
   let ranges: Range[] = [];
 
   onMount(() => {
+    return () => clearPaint();
+  });
+
+  // Registration must follow bind:this asynchronously — onMount can run
+  // before the $state ref is populated, which silently left chatScroller
+  // null (j/k + ctrl+d/u chat scrolling went nowhere). The effect
+  // re-registers when the ref lands and unregisters on destroy.
+  $effect(() => {
     actions.registerChatScroller(scroller);
-    return () => {
-      actions.registerChatScroller(null);
-      clearPaint();
-    };
+    return () => actions.registerChatScroller(null);
   });
 
   $effect(() => {

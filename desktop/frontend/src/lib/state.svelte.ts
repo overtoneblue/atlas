@@ -87,13 +87,17 @@ export const actions = {
     chatScroller = el;
   },
 
+  // Keyboard scrolling glides — native Chromium smooth scroll, same engine
+  // as the wheel. Holding j/k re-targets mid-flight, so it reads as one
+  // continuous motion.
   scrollChat(delta: number) {
-    if (chatScroller) chatScroller.scrollTop += delta * 44;
+    if (!chatScroller) return;
+    chatScroller.scrollTo({ top: chatScroller.scrollTop + delta * 44, behavior: "smooth" });
   },
 
   scrollChatTo(pos: "top" | "bottom") {
     if (!chatScroller) return;
-    chatScroller.scrollTo({ top: pos === "top" ? 0 : chatScroller.scrollHeight });
+    chatScroller.scrollTo({ top: pos === "top" ? 0 : chatScroller.scrollHeight, behavior: "smooth" });
   },
 
   async boot() {
