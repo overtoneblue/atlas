@@ -4,3 +4,7 @@
 
 # local `go build` output
 /atlas
+
+# python
+__pycache__/
+*.pyc
