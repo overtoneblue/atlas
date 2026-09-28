@@ -20,21 +20,18 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
 
-          # ── Desktop app (Wails v3) ───────────────────────────────────────
-          # Mirror of the Taskfile dev flow, made hermetic:
-          #   1. build the Vite frontend bundle from a hash-pinned npm cache,
-          #   2. embed it into the Go binaries via go:embed (frontend/dist),
-          #   3. build the desktop binary (cgo + GTK4/WebKitGTK 6.0) and the
-          #      server binary (pure Go, -tags server) from the same repo.
-          # Bindings under frontend/bindings/ are committed; the Nix build
-          # consumes them as-is (regenerate + commit via `task build` in the
-          # devShell when Go bindings change).
+          # ── Web UI bundle ────────────────────────────────────────────────
+          # The transport is a BUILD-TIME contract (vite define
+          # __ATLAS_WAILS__): only the retired Wails shell used the "wails*"
+          # modes; atlasd, Electron and browsers all build with "build:web"
+          # (mode web).
           frontend = pkgs.buildNpmPackage {
-            pname = "atlas-desktop-frontend";
-            version = "1.0.0-dev";
+            pname = "atlas-web";
+            version = "0.12.0";
             src = ./desktop/frontend;
             nodejs = pkgs.nodejs_22;
             npmDepsHash = "sha256-AZ/w0U6JtipUMy4KHtgzez7YgWw40P6NOII4T0wUosg=";
+            npmBuildScript = "build:web";
             installPhase = ''
               runHook preInstall
               mkdir -p $out
@@ -43,105 +40,87 @@
             '';
           };
 
-          # Seed frontend/dist (relative to modRoot=desktop) before go:embed.
-          seedFrontend = ''
-            rm -rf frontend/dist
-            mkdir -p frontend/dist
-            cp -r ${frontend}/. frontend/dist/
-          '';
+          # ── atlasd: the bridge daemon (pure Go) ──────────────────────────
+          atlasd = pkgs.buildGoModule {
+            pname = "atlasd";
+            version = "0.12.0";
+            src = ./.;
+            subPackages = [ "./cmd/atlasd" ];
+            vendorHash = "sha256-uwBJAqN4sIepiiJf9lCDumLqfKJEowQO2tOiSWD3Fig=";
+            env.CGO_ENABLED = 0;
+            meta.mainProgram = "atlasd";
+          };
 
           desktopItem = pkgs.makeDesktopItem {
             name = "atlas";
-            exec = "atlas-desktop";
+            exec = "atlas-electron";
+            icon = "atlas";
             desktopName = "Atlas";
             comment = "Keyboard-driven workstream client for Hermes";
             categories = [
               "Development"
-              "Utility"
             ];
-            startupWMClass = "org.wails.atlas-desktop";
-          };
-
-          # Shared inputs for both Go builds.
-          common = {
-            src = ./.;
-            modRoot = "desktop";
-            # Only the app package itself; ./build/{android,ios} are wails3
-            # mobile build scripts that don't compile on linux.
-            subPackages = [ "." ];
-            vendorHash = "sha256-vfetaz0eczRyX/ZqrkceyxyFW3G8ZSp2ZdoSowg0Dso=";
-            ldflags = [
-              "-s"
-              "-w"
-            ];
-            preBuild = seedFrontend;
+            startupWMClass = "Atlas";
           };
         in
         {
+          # TUI + daemon: what head runs (historical shape, unchanged).
           default = pkgs.buildGoModule {
             pname = "atlas";
             version = "0.12.0";
             src = ./.;
-
             subPackages = [ "." "./cmd/atlasd" ];
-
             vendorHash = "sha256-uwBJAqN4sIepiiJf9lCDumLqfKJEowQO2tOiSWD3Fig=";
-
             meta.mainProgram = "atlas";
           };
 
-          atlas-desktop = pkgs.buildGoModule (
-            common
-            // {
-              pname = "atlas-desktop";
-              version = "1.0.0-dev";
+          # ── atlas-electron: the desktop app ─────────────────────────────
+          # Electron shell + atlasd + web UI in one store path, with a
+          # wrapper and a desktop entry. The wrapper sources
+          # ~/.config/atlas/env (the per-user API URL/key boundary) and pins
+          # the store paths main.js discovers via ATLASD_BIN / ATLAS_WEB_DIR.
+          atlas-electron = pkgs.stdenv.mkDerivation {
+            pname = "atlas-electron";
+            version = "0.12.0";
+            src = ./.;
 
-              tags = [ "production" ];
+            # Pure assembly derivation: everything is built by the deps.
+            dontConfigure = true;
+            dontBuild = true;
 
-              nativeBuildInputs = [
-                pkgs.pkg-config
-                pkgs.wrapGAppsHook4
-              ];
-              buildInputs = [
-                pkgs.gtk4
-                pkgs.webkitgtk_6_0
-              ];
+            nativeBuildInputs = [
+              pkgs.makeWrapper
+              pkgs.copyDesktopItems
+            ];
+            desktopItems = [ desktopItem ];
 
-              postInstall = ''
-                mv $out/bin/desktop $out/bin/atlas-desktop
-                mkdir -p $out/share/applications
-                cp ${desktopItem}/share/applications/*.desktop $out/share/applications/
-              '';
+            installPhase = ''
+              runHook preInstall
 
-              meta = {
-                description = "Atlas desktop app (Wails v3 + Svelte): keyboard-driven workstream client for Hermes";
-                mainProgram = "atlas-desktop";
-                platforms = pkgs.lib.platforms.linux;
-              };
-            }
-          );
+              mkdir -p $out/bin $out/share/atlas-electron/web $out/share/atlas-electron/electron
+              mkdir -p $out/share/icons/hicolor/1024x1024/apps
 
-          atlas-desktop-server = pkgs.buildGoModule (
-            common
-            // {
-              pname = "atlas-desktop-server";
-              version = "1.0.0-dev";
+              install -m 0755 ${atlasd}/bin/atlasd $out/bin/atlasd
+              cp -r electron/. $out/share/atlas-electron/electron/
+              cp -r ${frontend}/. $out/share/atlas-electron/web/
+              cp desktop/build/appicon.png $out/share/icons/hicolor/1024x1024/apps/atlas.png
 
-              tags = [
-                "server"
-                "production"
-              ];
-              env.CGO_ENABLED = 0;
+              makeWrapper ${pkgs.electron}/bin/electron $out/bin/atlas-electron \
+                --add-flags "$out/share/atlas-electron/electron" \
+                --set ATLASD_BIN "$out/bin/atlasd" \
+                --set ATLAS_WEB_DIR "$out/share/atlas-electron/web" \
+                --set-default ATLAS_UPSTREAM "http://127.0.0.1:8645" \
+                --run '[ -f "$HOME/.config/atlas/env" ] && { set -a; . "$HOME/.config/atlas/env"; set +a; } || true'
 
-              postInstall = "mv $out/bin/desktop $out/bin/atlas-desktop-server";
+              runHook postInstall
+            '';
 
-              meta = {
-                description = "Atlas desktop app in server mode: the same UI served over HTTP (phone / any browser)";
-                mainProgram = "atlas-desktop-server";
-                platforms = pkgs.lib.platforms.linux;
-              };
-            }
-          );
+            meta = {
+              description = "Atlas desktop app (Electron): keyboard-driven workstream client for Hermes";
+              mainProgram = "atlas-electron";
+              platforms = pkgs.lib.platforms.linux;
+            };
+          };
         }
       );
 
@@ -150,13 +129,9 @@
           type = "app";
           program = "${self.packages.${system}.default}/bin/atlas";
         };
-        atlas-desktop = {
+        atlas-electron = {
           type = "app";
-          program = "${self.packages.${system}.atlas-desktop}/bin/atlas-desktop";
-        };
-        atlas-desktop-server = {
-          type = "app";
-          program = "${self.packages.${system}.atlas-desktop-server}/bin/atlas-desktop-server";
+          program = "${self.packages.${system}.atlas-electron}/bin/atlas-electron";
         };
       });
 
@@ -169,12 +144,9 @@
             packages = [ pkgs.go pkgs.gnumake ];
           };
 
-          # Desktop (Wails v3) build environment: GTK4 + WebKitGTK 6.0,
-          # pkg-config wiring, node for the frontend, go-task for wails3.
+          # Frontend/atlasd work: node for the vite build, go for the daemon.
           desktop = pkgs.mkShell {
-            nativeBuildInputs = [ pkgs.pkg-config ];
-            buildInputs = [ pkgs.gtk4 pkgs.webkitgtk_6_0 ];
-            packages = [ pkgs.go pkgs.gcc pkgs.nodejs_22 pkgs.go-task ];
+            packages = [ pkgs.go pkgs.gcc pkgs.nodejs_22 ];
           };
         });
     };

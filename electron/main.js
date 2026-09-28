@@ -12,6 +12,7 @@
 //   ATLASD_BIN=path        atlasd binary (default: ../bin/atlasd)
 //   ATLASD_PORT=8644       daemon port
 //   ATLASD_EXTERNAL=1      use an already-running daemon; don't spawn
+//   ATLAS_WEB_DIR=path     built web UI directory (default: ../desktop/frontend/dist)
 //
 // Wayland note: Electron defaults to XWayland. For native Wayland run
 // with ELECTRON_OZONE_PLATFORM_HINT=auto electron .
@@ -24,6 +25,10 @@ const http = require("node:http");
 
 const PORT = Number(process.env.ATLASD_PORT || 8644);
 const ORIGIN = `http://127.0.0.1:${PORT}`;
+
+// Product identity: userData dir + window class association (matches the
+// desktop entry's StartupWMClass, so launchers group/focus us correctly).
+app.setName("Atlas");
 
 // Native animated wheel scrolling. Measured on this exact build (Electron
 // 43 / Chromium 150): wheel already animates natively — ~120px over ~270ms,
@@ -52,13 +57,19 @@ function findAtlasd() {
 }
 
 function findWebDir() {
-  const dist = path.join(__dirname, "..", "desktop", "frontend", "dist");
-  try {
-    fs.accessSync(path.join(dist, "index.html"));
-    return dist;
-  } catch {
-    return null;
+  const candidates = [
+    process.env.ATLAS_WEB_DIR,
+    path.join(__dirname, "..", "desktop", "frontend", "dist"),
+  ].filter(Boolean);
+  for (const c of candidates) {
+    try {
+      fs.accessSync(path.join(c, "index.html"));
+      return c;
+    } catch {
+      /* try next */
+    }
   }
+  return null;
 }
 
 function pingDaemon(timeoutMs = 1500) {
