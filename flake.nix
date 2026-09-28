@@ -31,7 +31,7 @@
             src = ./desktop/frontend;
             nodejs = pkgs.nodejs_22;
             # baked into the bundle (status bar version) via vite define
-            env.ATLAS_VERSION = "0.14.2";
+            env.ATLAS_VERSION = "0.14.3";
             npmDepsHash = "sha256-AZ/w0U6JtipUMy4KHtgzez7YgWw40P6NOII4T0wUosg=";
             npmBuildScript = "build:web";
             installPhase = ''
