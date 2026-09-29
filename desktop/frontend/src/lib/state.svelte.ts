@@ -95,6 +95,7 @@ export const s = $state({
   lightbox: null as { src: string; alt: string } | null,
   // command palette (composer "/" affordance)
   paletteIdx: 0,
+  paletteMoved: false, // user navigated the palette explicitly (arrows)
   paletteDismissed: null as string | null,
 });
 
@@ -574,6 +575,22 @@ export const actions = {
   // effort) and referenced as MEDIA: lines so history re-renders them.
   async send() {
     if (!s.open) return;
+    // TUI-parity dispatch: a draft that begins with "/" is a command, not a
+    // message — route it (arguments included) even when the palette is
+    // hidden or dismissed. Local atlas commands win; everything else goes
+    // to hermes (e.g. "/model sonnet").
+    const cmd = s.draft.trim();
+    if (cmd.length > 1 && cmd.startsWith("/") && !cmd.startsWith("//")) {
+      const first = cmd.split(/\s+/, 1)[0].toLowerCase();
+      const local = COMMANDS.find((c) => c.name.toLowerCase() === first);
+      this.clearPalette();
+      if (local) {
+        local.run();
+        return;
+      }
+      void this.execCommand(cmd);
+      return;
+    }
     if (s.turnBusy[s.open.id]) {
       s.statusText = "a turn is already running — ctrl+c stops it";
       return;
@@ -682,7 +699,9 @@ export const actions = {
       const res = await api.ExecSlash(open.id, command);
       this.foldExec(res, command);
     } catch (e: unknown) {
-      s.statusText = `${command} failed: ` + errText(e);
+      const msg = errText(e);
+      s.statusText = `${command} failed: ` + msg;
+      this.pushNote(`${command} — ${msg}`);
     }
   },
 
@@ -928,12 +947,14 @@ export const actions = {
 
   paletteReset() {
     s.paletteIdx = 0;
+    s.paletteMoved = false;
     void this.fetchCompletions();
   },
 
   paletteMove(dir: number) {
     const n = paletteItems(s.draft).length;
     if (!n) return;
+    s.paletteMoved = true;
     s.paletteIdx = ((s.paletteIdx + dir) % n + n) % n;
   },
 
@@ -941,19 +962,49 @@ export const actions = {
     s.paletteDismissed = s.draft;
   },
 
+  // Enter runs what the draft clearly points at: the selected row once the
+  // user has navigated (arrows/click), else the first command the draft
+  // prefixes (e.g. "/he" -> /help). A draft matching nothing by prefix is
+  // dispatched to hermes as-is (it answers, e.g. the /models -> /model
+  // hint) instead of silently running a fuzzy descendant like
+  // /codex-runtime.
   runPalette() {
-    this.runPaletteAt(s.paletteIdx);
+    const items = paletteItems(s.draft);
+    if (!items.length) return;
+    let it = s.paletteMoved
+      ? items[Math.max(0, Math.min(s.paletteIdx, items.length - 1))]
+      : undefined;
+    if (!it) {
+      const d = s.draft.trim().toLowerCase();
+      it = items.find((x) => x.name.toLowerCase().startsWith(d));
+    }
+    if (!it) {
+      const raw = s.draft.trim();
+      this.clearPalette();
+      if (raw.length > 1 && raw.startsWith("/")) void this.execCommand(raw);
+      return;
+    }
+    this.runItem(it);
   },
 
   runPaletteAt(i: number) {
     const items = paletteItems(s.draft);
     const it = items[Math.max(0, Math.min(i, items.length - 1))];
     if (!it) return;
+    this.runItem(it);
+  },
+
+  clearPalette() {
     s.draft = "";
     s.paletteIdx = 0;
+    s.paletteMoved = false;
     s.paletteDismissed = null;
     s.catComplete = [];
     s.catDraft = "";
+  },
+
+  runItem(it: PaletteItem) {
+    this.clearPalette();
     if (it.local) {
       it.local.run();
       return;

@@ -224,6 +224,13 @@ func (d *Service) ExecSlash(sessionID, command string) (*hermes.ExecResult, erro
 		}
 	}
 	if err != nil {
+		// An RPC error means the command engine answered (usage text like
+		// "/moa <prompt>", unknown-command hints, dead session) — that is
+		// transcript output, not a transport failure.
+		var rpcErr *hermes.RPCError
+		if errors.As(err, &rpcErr) {
+			return &hermes.ExecResult{Output: rpcErr.Message}, nil
+		}
 		return nil, fmt.Errorf("serve exec: %w", err)
 	}
 	return res, nil
