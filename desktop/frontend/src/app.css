@@ -373,6 +373,48 @@ button {
   white-space: nowrap;
 }
 
+/* exact tool calls (display mode 2): verbatim payload, scrollable */
+.tool.exact {
+  display: block;
+}
+
+.tool.exact .tfull {
+  margin: 4px 0 2px;
+  padding: 6px 8px;
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+/* local note rows (slash-command output) */
+.note {
+  margin: 8px 18px 8px 46px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--line);
+  background: var(--surface2);
+  border-radius: 0 6px 6px 0;
+}
+
+.note .ntext {
+  margin: 0;
+  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--dim2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 50vh;
+  overflow: auto;
+}
+
 /* ------- composer ------- */
 
 .composer {
@@ -695,6 +737,8 @@ button {
   border-radius: 8px;
   padding: 6px;
   z-index: 45;
+  max-height: 46vh;
+  overflow-y: auto;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
 }
 
@@ -719,6 +763,20 @@ button {
 .pdesc {
   color: var(--dim);
   font-size: 12px;
+}
+
+.pkind {
+  flex: none;
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--faint);
+  text-transform: lowercase;
+}
+
+.pkind.skill {
+  color: var(--purple);
 }
 
 .phint {

@@ -5,7 +5,17 @@
 // relative URLs just work. During vite dev the UI runs on :9245, so point
 // VITE_ATLASD_URL at the daemon; atlasd allows loopback-origin CORS.
 
-import type { HubTree, Message, Session, SpawnList, Status as StatusT, TurnEvent } from "./types";
+import type {
+  Catalog,
+  Completion,
+  ExecResult,
+  HubTree,
+  Message,
+  Session,
+  SpawnList,
+  Status as StatusT,
+  TurnEvent,
+} from "./types";
 
 const BASE: string = import.meta.env.VITE_ATLASD_URL ?? "";
 
@@ -103,6 +113,23 @@ export async function InitialSession(): Promise<string> {
 // pi task quartet).
 export async function FetchSpawned(): Promise<SpawnList> {
   return get("/api/spawned");
+}
+
+// Slash-command catalog from hermes-serve (daemon-cached).
+export async function GetCommands(): Promise<Catalog> {
+  return get("/api/commands");
+}
+
+// Live fuzzy slash/skill completions for the composer draft.
+export async function CompleteSlash(text: string, sessionID: string): Promise<Completion[]> {
+  const q = `text=${encodeURIComponent(text)}&session=${encodeURIComponent(sessionID)}`;
+  const r = await get<{ items?: Completion[] }>(`/api/complete?${q}`);
+  return r.items ?? [];
+}
+
+// Run one slash command against the open session (stored or runtime id).
+export async function ExecSlash(sessionID: string, command: string): Promise<ExecResult> {
+  return postJSON<ExecResult>("/api/exec", { session: sessionID, command });
 }
 
 // Text tail of one spawned run's live log (the hub shapes the path).

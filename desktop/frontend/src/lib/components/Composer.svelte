@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { s, actions, paletteMatches, paletteVisible } from "../state.svelte";
+  import { s, actions, paletteItems, paletteVisible } from "../state.svelte";
   import { preLiftComposer } from "../mobile-viewport";
 
   let ta = $state<HTMLTextAreaElement | null>(null);
@@ -59,7 +59,7 @@
 >
   {#if paletteVisible()}
     <div class="palette">
-      {#each paletteMatches(s.draft) as c, i}
+      {#each paletteItems(s.draft) as c, i}
         <div
           class="prow"
           class:sel={i === s.paletteIdx}
@@ -68,6 +68,7 @@
           role="presentation"
         >
           <span class="pname">{c.name}</span>
+          {#if c.kind !== "local"}<span class="pkind {c.kind}">{c.kind === "skill" ? "skill" : "cmd"}</span>{/if}
           <span class="pdesc">{c.desc}</span>
         </div>
       {/each}

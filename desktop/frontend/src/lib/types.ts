@@ -70,8 +70,42 @@ export type Message = {
 export type Status = {
   api: boolean;
   hub: boolean;
+  serve?: boolean;
   api_url: string;
   hub_url: string;
+  serve_url?: string;
+};
+
+// Slash-command surface (hermes-serve via atlasd): the catalog powers the
+// palette, complete.slash the live fuzzy matches, slash.exec the runs.
+export type CatalogMeta = { argument_mode?: string | null; desktop?: string | null };
+
+export type Catalog = {
+  pairs: [string, string][];
+  categories: { name: string; pairs: [string, string][] }[];
+  commands: Record<string, CatalogMeta>;
+  skills: Record<string, { usage: number; origin: string }>;
+  skill_count?: number;
+};
+
+export type Completion = {
+  text: string;
+  display?: string;
+  meta?: string;
+  kind?: string; // command | skill
+};
+
+export type ExecResult = {
+  output?: string;
+  warning?: string;
+  // command.dispatch directive fields (present when the command was rerouted)
+  type?: string;
+  target?: string;
+  message?: string;
+  notice?: string;
+  display?: string;
+  name?: string;
+  status?: string;
 };
 
 export type Row = {

@@ -223,7 +223,8 @@ function onKey(e: KeyboardEvent) {
       break;
     case "h":
       e.preventDefault();
-      actions.foldAt(true);
+      if (s.focus === "chat") actions.cycleDisplay();
+      else actions.foldAt(true);
       break;
     case "l":
       e.preventDefault();
@@ -260,7 +261,7 @@ function onKey(e: KeyboardEvent) {
       break;
     case "r":
       e.preventDefault();
-      actions.toggleReasoning();
+      actions.cycleDisplay();
       break;
     case "?":
       e.preventDefault();

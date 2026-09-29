@@ -48,6 +48,7 @@
   <span class="dots">
     <span class:ok={s.status?.hub === true} class:bad={s.status !== null && s.status.hub === false}>hub</span>
     <span class:ok={s.status?.api === true} class:bad={s.status !== null && s.status.api === false}>api</span>
+    <span class:ok={s.status?.serve === true} class:bad={s.status !== null && s.status.serve === false}>serve</span>
   </span>
   <span class="ver" onclick={verTap}>atlas {__ATLAS_VERSION__}</span>
 </div>

@@ -7,10 +7,29 @@
   let scroller = $state<HTMLDivElement | null>(null);
   let findInput = $state<HTMLInputElement | null>(null);
   let stick = true;
+  let pinQueued = false;
   // Live DOM ranges for the current query. Component-local + non-reactive
   // by design: ranges are DOM objects, and only the count/current index
   // need to live in app state.
   let ranges: Range[] = [];
+
+  // Pin the scroller to the newest content after the DOM settles. rAF runs
+  // post-layout, which kills the old race where streamed content growth
+  // out-ran a microtask scroll and following silently stopped.
+  function pinSoon() {
+    if (pinQueued) return;
+    pinQueued = true;
+    requestAnimationFrame(() => {
+      pinQueued = false;
+      if (scroller && stick) scroller.scrollTo({ top: scroller.scrollHeight });
+    });
+  }
+
+  // A real wheel-up is the user reading history: drop the pin immediately.
+  // Content growth and layout shifts must never unpin on their own.
+  function onWheel(e: WheelEvent) {
+    if (e.deltaY < -1 && !e.ctrlKey) stick = false;
+  }
 
   // Phones: touch-only hint text (no vim keybinds).
   const coarse = window.matchMedia("(pointer: coarse)").matches;
@@ -34,7 +53,7 @@
     const el = scroller;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      if (stick) el.scrollTo({ top: el.scrollHeight });
+      if (stick) pinSoon();
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -44,7 +63,17 @@
     void s.autoScroll;
     void s.messages.length;
     if (!scroller) return;
-    if (stick) queueMicrotask(() => scroller?.scrollTo({ top: scroller.scrollHeight }));
+    if (stick) pinSoon();
+  });
+
+  // stickBump (sending, command output) forces the view back to the bottom
+  // even if the user had scrolled away — sending is an explicit "show me
+  // the newest" intent.
+  $effect(() => {
+    void s.stickBump;
+    if (!scroller) return;
+    stick = true;
+    pinSoon();
   });
 
   // ---- find: DOM range engine (query/cursor live in state) -------------
@@ -224,7 +253,7 @@
         </span>
       </div>
     {/if}
-    <div class="scroller" bind:this={scroller} onscroll={onScroll}>
+    <div class="scroller" bind:this={scroller} onscroll={onScroll} onwheel={onWheel}>
       {#if s.loadingOpen && s.messages.length === 0}
         <div class="pad dim">loading…</div>
       {/if}
@@ -233,10 +262,16 @@
       {/if}
       {#each s.messages as m, i (m.id)}
         {#if m.tool_name}
-          <div class="tool" data-mi={i} class:vs={inVisual(i)}>
-            <span class="tname">{toolGlyph(m.tool_name)} {m.tool_name}</span>
-            <span class="snip">{firstLine(m.content)}</span>
-          </div>
+          {#if s.dispMode !== 3}
+            <div class="tool" data-mi={i} class:vs={inVisual(i)} class:exact={s.dispMode === 2}>
+              <span class="tname">{toolGlyph(m.tool_name)} {m.tool_name}</span>
+              {#if s.dispMode === 2}
+                <pre class="tfull">{m.content}</pre>
+              {:else}
+                <span class="snip">{firstLine(m.content)}</span>
+              {/if}
+            </div>
+          {/if}
         {:else if m.role === "user"}
           <div
             class="msg user"
@@ -256,6 +291,10 @@
               {#if m.content}<div class="body">{@html mdLite(m.content)}</div>{/if}
             </div>
           </div>
+        {:else if m.role === "note"}
+          <div class="note" data-mi={i} class:vs={inVisual(i)}>
+            <pre class="ntext">{m.content}</pre>
+          </div>
         {:else}
           <div
             class="msg agent"
@@ -267,7 +306,7 @@
               <span class="who" style={`color:${authorColor()}`}>{authorName()}</span>
               <span class="time">{timeHM(m.timestamp)}</span>
             </div>
-            {#if s.showReasoning && m.reasoning}
+            {#if s.dispMode === 0 && m.reasoning}
               <div class="reason">{@html mdLite(m.reasoning)}</div>
             {/if}
             <div class="body">{@html mdLite(m.content)}</div>
@@ -282,10 +321,12 @@
           </div>
           {#each s.live.segments as seg}
             {#if seg.type === "tool"}
-              <div class="tool">
-                <span class="tname">{toolGlyph(seg.name)} {seg.name}</span>
-                <span class="snip">{seg.state === "done" ? "✓" : "…"}</span>
-              </div>
+              {#if s.dispMode !== 3}
+                <div class="tool">
+                  <span class="tname">{toolGlyph(seg.name)} {seg.name}</span>
+                  <span class="snip">{seg.state === "done" ? "✓" : "…"}</span>
+                </div>
+              {/if}
             {:else}
               <div class="body">{@html mdLite(seg.text)}</div>
             {/if}

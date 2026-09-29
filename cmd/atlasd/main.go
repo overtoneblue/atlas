@@ -67,6 +67,9 @@ func main() {
 	mux.HandleFunc("POST /api/send", api.send)
 	mux.HandleFunc("POST /api/stop", api.stop)
 	mux.HandleFunc("POST /api/attach", api.attach)
+	mux.HandleFunc("GET /api/commands", api.commands)
+	mux.HandleFunc("GET /api/complete", api.complete)
+	mux.HandleFunc("POST /api/exec", api.exec)
 	mux.HandleFunc("GET /media", api.media)
 	mux.HandleFunc("GET /api/events", api.events)
 
@@ -216,6 +219,54 @@ func (a *api) stop(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err)
 	default:
 		writeError(w, http.StatusInternalServerError, err)
+	}
+}
+
+// commands serves the slash-command catalog from hermes-serve (cached).
+func (a *api) commands(w http.ResponseWriter, r *http.Request) {
+	cat, err := a.svc.GetCatalog(r.URL.Query().Get("refresh") == "1")
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, cat)
+}
+
+// complete proxies live slash/skill completions for the composer.
+func (a *api) complete(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	text := q.Get("text")
+	if text == "" {
+		writeJSON(w, map[string]any{"items": []any{}})
+		return
+	}
+	items, err := a.svc.CompleteSlash(text, q.Get("session"))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, map[string]any{"items": items})
+}
+
+// exec runs one slash command against the open session and returns its
+// output (or a command.dispatch directive for rerouted commands).
+func (a *api) exec(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Session string `json:"session"`
+		Command string `json:"command"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("bad request body"))
+		return
+	}
+	res, err := a.svc.ExecSlash(req.Session, req.Command)
+	switch {
+	case err == nil:
+		writeJSON(w, res)
+	case errors.Is(err, daemon.ErrEmpty):
+		writeError(w, http.StatusBadRequest, err)
+	default:
+		writeError(w, http.StatusBadGateway, err)
 	}
 }
 

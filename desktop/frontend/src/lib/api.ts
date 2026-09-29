@@ -2,7 +2,16 @@
 // transport is picked at build time (Wails legacy shell vs atlasd
 // HTTP+SSE); everything above this file stays identical either way.
 
-import type { HubTree, Message, Session, SpawnList, Status as StatusT } from "./types";
+import type {
+  Catalog,
+  Completion,
+  ExecResult,
+  HubTree,
+  Message,
+  Session,
+  SpawnList,
+  Status as StatusT,
+} from "./types";
 import { isWails } from "./transport";
 import * as http from "./transport-http";
 import * as wails from "./transport-wails";
@@ -43,6 +52,13 @@ export const InitialSession = (): Promise<string> => t.InitialSession();
 
 // Spawned work (subagent runs + pi tasks), for nesting under their chat.
 export const GetSpawned = (): Promise<SpawnList> => t.FetchSpawned();
+
+// Slash-command surface (hermes-serve via the active transport).
+export const GetCommands = (): Promise<Catalog> => t.GetCommands();
+export const CompleteSlash = (text: string, sessionID: string): Promise<Completion[]> =>
+  t.CompleteSlash(text, sessionID);
+export const ExecSlash = (sessionID: string, command: string): Promise<ExecResult> =>
+  t.ExecSlash(sessionID, command);
 
 // Text tail of one spawned run's live log.
 export const GetSpawnLog = (

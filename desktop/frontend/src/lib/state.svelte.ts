@@ -6,6 +6,9 @@
 // (subagent runs + pi tasks nested under their chat).
 
 import type {
+  Catalog,
+  Completion,
+  ExecResult,
   Focus,
   HubNode,
   LiveTurn,
@@ -65,7 +68,15 @@ export const s = $state({
   visualCur: 0,
   // parity toggles
   helpOpen: false,
-  showReasoning: false,
+  // display density cycle: 0 full | 1 no reasoning | 2 exact tools | 3 quiet
+  dispMode: 0,
+  // slash-command surface (hermes-serve via atlasd)
+  catalog: null as Catalog | null,
+  catComplete: [] as Completion[], // live complete.slash items for catDraft
+  catDraft: "", // the draft the completions belong to
+  catSeq: 0, // debounce / stale-response guard
+  // bumped to force the transcript back to the bottom (send, exec output)
+  stickBump: 0,
   // mobile: off-canvas workstreams drawer
   navOpen: false,
   pendingCount: 0, // vim count prefix (3j)
@@ -129,6 +140,7 @@ export const actions = {
     }
     await this.refreshTree(true);
     void this.refreshSpawned();
+    void this.loadCatalog();
 
     // Open target: --open session when present, else the first visible post.
     let target: HubNode | null = null;
@@ -490,7 +502,7 @@ export const actions = {
     const lines: string[] = [];
     for (let i = a; i <= b; i++) {
       const m = s.messages[i];
-      if (!m || m.tool_name || !m.content?.trim()) continue;
+      if (!m || m.tool_name || m.role === "note" || !m.content?.trim()) continue;
       lines.push(`${roleName(m.role)}: ${m.content.trim()}`);
     }
     const text = lines.join("\n\n");
@@ -518,9 +530,26 @@ export const actions = {
     s.helpOpen = false;
   },
 
-  toggleReasoning() {
-    s.showReasoning = !s.showReasoning;
-    s.statusText = s.showReasoning ? "reasoning shown" : "reasoning hidden";
+  // cycleDisplay steps the transcript's activity density. One key (h with
+  // chat focus, r, or /display) advances: full → reasoning hidden → exact
+  // tool calls → quiet (messages only) → full.
+  cycleDisplay() {
+    s.dispMode = (s.dispMode + 1) % 4;
+    s.statusText = [
+      "display: full (reasoning + tool calls)",
+      "display: reasoning hidden",
+      "display: exact tool calls",
+      "display: quiet — messages only",
+    ][s.dispMode];
+  },
+
+  // loadCatalog warms the slash-command palette from hermes-serve.
+  async loadCatalog() {
+    try {
+      s.catalog = await api.GetCommands();
+    } catch {
+      /* palette falls back to atlas-local commands */
+    }
   },
 
   addAttachment(dataUrl: string) {
@@ -580,6 +609,7 @@ export const actions = {
       },
     ]);
     s.autoScroll += 1;
+    s.stickBump += 1;
 
     // Wire shape: plain string, or content parts when images are attached.
     const payload: string | unknown[] = imgs.length
@@ -609,6 +639,121 @@ export const actions = {
       await api.StopTurn(s.open.id);
     } catch (e: unknown) {
       s.statusText = "stop failed: " + errText(e);
+    }
+  },
+
+  // ---- hermes slash commands (hermes-serve) ----------------------------
+
+  // fetchCompletions pulls live fuzzy matches for a bare "/token" draft
+  // (debounced; stale responses are dropped via catSeq).
+  async fetchCompletions() {
+    const draft = s.draft;
+    if (!/^\/[a-z0-9_-]*$/i.test(draft) || !s.open) {
+      s.catComplete = [];
+      s.catDraft = "";
+      return;
+    }
+    const seq = ++s.catSeq;
+    await new Promise((r) => setTimeout(r, 90));
+    if (seq !== s.catSeq || s.draft !== draft) return;
+    try {
+      const items = await api.CompleteSlash(draft, s.open.id);
+      if (seq !== s.catSeq) return;
+      s.catComplete = items;
+      s.catDraft = draft;
+    } catch {
+      s.catComplete = [];
+      s.catDraft = "";
+    }
+  },
+
+  // execCommand runs one hermes command against the open session and folds
+  // the result in: text renders as a local note row; dispatch directives
+  // follow the desktop semantics (prefill fills the composer, send/skill
+  // seed a turn, alias re-executes its target).
+  async execCommand(command: string) {
+    const open = s.open;
+    if (!open) {
+      s.statusText = "open a workstream first";
+      return;
+    }
+    s.statusText = `running ${command}…`;
+    try {
+      const res = await api.ExecSlash(open.id, command);
+      this.foldExec(res, command);
+    } catch (e: unknown) {
+      s.statusText = `${command} failed: ` + errText(e);
+    }
+  },
+
+  foldExec(res: ExecResult, invoked: string) {
+    if (res.type === "alias" && res.target) {
+      void this.execCommand(res.target);
+      return;
+    }
+    if (res.type === "prefill") {
+      s.draft = res.message ?? res.display ?? "";
+      this.setFocus("composer");
+      s.statusText = `${invoked} → composer`;
+      return;
+    }
+    if (res.type === "send" || res.type === "skill") {
+      if (res.display) this.pushNote(res.display);
+      const msg = res.message ?? "";
+      if (msg) void this.sendRaw(msg);
+      return;
+    }
+    const text = res.output ?? res.display ?? res.notice ?? "";
+    if (text) this.pushNote(text);
+    if (res.warning) s.statusText = res.warning;
+    else if (!text) s.statusText = `${invoked} done`;
+  },
+
+  // pushNote appends a local-only output row (commands are ephemeral by
+  // design: a transcript refresh drops them).
+  pushNote(text: string) {
+    s.messages = s.messages.concat([
+      {
+        id: -Date.now(),
+        role: "note",
+        content: text,
+        tool_name: "",
+        reasoning: "",
+        timestamp: Date.now() / 1000,
+      },
+    ]);
+    s.autoScroll += 1;
+    s.stickBump += 1;
+  },
+
+  // sendRaw posts a message as a turn without touching the composer
+  // (slashes that seed a prompt: /goal, skills, …).
+  async sendRaw(text: string) {
+    const open = s.open;
+    if (!open || !text) return;
+    if (s.turnBusy[open.id]) {
+      s.statusText = "a turn is already running";
+      return;
+    }
+    const echoID = -Date.now();
+    s.messages = s.messages.concat([
+      {
+        id: echoID,
+        role: "user",
+        content: text,
+        tool_name: "",
+        reasoning: "",
+        timestamp: Date.now() / 1000,
+      },
+    ]);
+    s.autoScroll += 1;
+    s.stickBump += 1;
+    try {
+      await api.SendMessage(open.profile, open.id, text);
+      s.statusText = "streaming…";
+    } catch (e: unknown) {
+      s.messages = s.messages.filter((m) => m.id !== echoID);
+      s.statusText = "send failed: " + errText(e);
     }
   },
 
@@ -783,10 +928,11 @@ export const actions = {
 
   paletteReset() {
     s.paletteIdx = 0;
+    void this.fetchCompletions();
   },
 
   paletteMove(dir: number) {
-    const n = paletteMatches(s.draft).length;
+    const n = paletteItems(s.draft).length;
     if (!n) return;
     s.paletteIdx = ((s.paletteIdx + dir) % n + n) % n;
   },
@@ -800,19 +946,26 @@ export const actions = {
   },
 
   runPaletteAt(i: number) {
-    const cmds = paletteMatches(s.draft);
-    const c = cmds[Math.max(0, Math.min(i, cmds.length - 1))];
-    if (!c) return;
+    const items = paletteItems(s.draft);
+    const it = items[Math.max(0, Math.min(i, items.length - 1))];
+    if (!it) return;
     s.draft = "";
     s.paletteIdx = 0;
     s.paletteDismissed = null;
-    c.run();
+    s.catComplete = [];
+    s.catDraft = "";
+    if (it.local) {
+      it.local.run();
+      return;
+    }
+    void this.execCommand(it.text ?? it.name);
   },
 };
 
 // ---- command palette registry ----------------------------------------
-// Commands route through the same actions the keys use; names render with
-// a leading slash and the palette filters on the typed suffix.
+// Atlas-local UI commands (they shadow same-named hermes commands on
+// purpose: find/visual/display act on the client). Everything else in the
+// palette comes from the live hermes catalog + completion surface.
 
 export interface Command {
   name: string;
@@ -823,7 +976,7 @@ export interface Command {
 export const COMMANDS: Command[] = [
   { name: "/help", desc: "keys + commands sheet", run: () => actions.toggleHelp() },
   { name: "/stop", desc: "stop the running turn", run: () => void actions.stopTurn() },
-  { name: "/reasoning", desc: "toggle reasoning blocks", run: () => actions.toggleReasoning() },
+  { name: "/display", desc: "cycle display: reasoning · exact tools · quiet", run: () => actions.cycleDisplay() },
   { name: "/find", desc: "search the open transcript", run: () => actions.findStart() },
   { name: "/visual", desc: "start a selection at the top message", run: () => actions.visualStart(false) },
   { name: "/refresh", desc: "reload the transcript from head", run: () => void actions.refreshTranscript() },
@@ -832,11 +985,59 @@ export const COMMANDS: Command[] = [
   { name: "/bottom", desc: "jump to the newest message", run: () => actions.scrollChatTo("bottom") },
 ];
 
-export function paletteMatches(draft: string): Command[] {
-  const m = /^\/([a-z]*)$/i.exec(draft);
+// One palette row: local commands run client-side; hermes entries run via
+// slash.exec on the daemon side.
+export interface PaletteItem {
+  name: string;
+  desc: string;
+  kind: "local" | "command" | "skill";
+  local?: Command;
+  text?: string; // the exact command text for hermes exec
+}
+
+// Browse ("/") lists the full catalog; typing narrows. The cap is only a
+// DOM safety rail.
+const PALETTE_CAP = 300;
+
+export function paletteItems(draft: string): PaletteItem[] {
+  const m = /^\/([a-z0-9_-]*)$/i.exec(draft);
   if (!m) return [];
   const f = m[1].toLowerCase();
-  return COMMANDS.filter((c) => c.name.slice(1).toLowerCase().startsWith(f));
+  const out: PaletteItem[] = [];
+  const seen = new Set<string>();
+  for (const c of COMMANDS) {
+    if (c.name.slice(1).toLowerCase().startsWith(f)) {
+      out.push({ name: c.name, desc: c.desc, kind: "local", local: c });
+      seen.add(c.name);
+    }
+  }
+  // Live completion (fuzzy, ranked, skills included) for the current
+  // draft; falls back to a prefix filter over the cached catalog.
+  const comp = s.catDraft === draft ? s.catComplete : [];
+  if (comp.length) {
+    for (const it of comp) {
+      const raw = it.text.trim();
+      const name = raw.startsWith("/") ? raw : "/" + raw;
+      if (name === "/" || seen.has(name)) continue;
+      out.push({
+        name,
+        desc: it.meta || it.display || "",
+        kind: it.kind === "skill" ? "skill" : "command",
+        text: name,
+      });
+    }
+  } else if (s.catalog) {
+    for (const [name, desc] of s.catalog.pairs) {
+      if (!name.toLowerCase().slice(1).startsWith(f) || seen.has(name)) continue;
+      out.push({ name, desc, kind: "command", text: name });
+    }
+    for (const sk of Object.keys(s.catalog.skills ?? {})) {
+      const name = sk.startsWith("/") ? sk : "/" + sk;
+      if (!name.toLowerCase().slice(1).startsWith(f) || seen.has(name)) continue;
+      out.push({ name, desc: "skill command", kind: "skill", text: name });
+    }
+  }
+  return out.slice(0, PALETTE_CAP);
 }
 
 // Visible while the composer draft is a bare "/suffix" (no arguments yet)
@@ -846,7 +1047,7 @@ export function paletteVisible(): boolean {
     s.focus === "composer" &&
     s.mode === "INSERT" &&
     s.paletteDismissed !== s.draft &&
-    paletteMatches(s.draft).length > 0
+    paletteItems(s.draft).length > 0
   );
 }
 

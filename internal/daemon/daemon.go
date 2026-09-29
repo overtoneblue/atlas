@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -33,8 +34,9 @@ var (
 
 // Service is the single bridge to head services.
 type Service struct {
-	api *hermes.Client
-	hub *hermes.Hub
+	api   *hermes.Client
+	hub   *hermes.Hub
+	serve *hermes.Serve
 
 	mu    sync.Mutex
 	turns map[string]*activeTurn // one in-flight turn per session
@@ -42,6 +44,17 @@ type Service struct {
 	subMu   sync.Mutex
 	subs    map[int]chan TurnEvent
 	nextSub int
+
+	// slash-command catalog cache (serve restarts don't change it often;
+	// a stale copy is served when the service is briefly unreachable)
+	catMu    sync.Mutex
+	catCache *hermes.Catalog
+	catAt    time.Time
+
+	// stored session id -> live runtime id in hermes-serve (resume mints
+	// one; commands address sessions by runtime id)
+	rtMu     sync.Mutex
+	runtimes map[string]string
 
 	initialSession string
 }
@@ -59,10 +72,12 @@ type activeTurn struct {
 
 func New() *Service {
 	return &Service{
-		api:   hermes.NewFromEnv(),
-		hub:   hermes.NewHubFromEnv(),
-		turns: make(map[string]*activeTurn),
-		subs:  make(map[int]chan TurnEvent),
+		api:      hermes.NewFromEnv(),
+		hub:      hermes.NewHubFromEnv(),
+		serve:    hermes.NewServeFromEnv(),
+		turns:    make(map[string]*activeTurn),
+		subs:     make(map[int]chan TurnEvent),
+		runtimes: make(map[string]string),
 	}
 }
 
@@ -126,19 +141,92 @@ func (d *Service) emit(ev TurnEvent) {
 
 // Status reports which upstreams are configured, for the status bar.
 type Status struct {
-	API    bool   `json:"api"`
-	Hub    bool   `json:"hub"`
-	APIURL string `json:"api_url"`
-	HubURL string `json:"hub_url"`
+	API      bool   `json:"api"`
+	Hub      bool   `json:"hub"`
+	Serve    bool   `json:"serve"`
+	APIURL   string `json:"api_url"`
+	HubURL   string `json:"hub_url"`
+	ServeURL string `json:"serve_url"`
 }
 
 func (d *Service) Status() Status {
 	return Status{
-		API:    d.api.Configured(),
-		Hub:    d.hub.Configured(),
-		APIURL: d.api.BaseURL,
-		HubURL: d.hub.BaseURL,
+		API:      d.api.Configured(),
+		Hub:      d.hub.Configured(),
+		Serve:    d.serve.Configured(),
+		APIURL:   d.api.BaseURL,
+		HubURL:   d.hub.BaseURL,
+		ServeURL: d.serve.BaseURL,
 	}
+}
+
+// GetCatalog returns the slash-command catalog from hermes-serve, cached
+// briefly; a stale cache is served when the service is unreachable, so the
+// palette degrades instead of emptying.
+func (d *Service) GetCatalog(refresh bool) (*hermes.Catalog, error) {
+	d.catMu.Lock()
+	defer d.catMu.Unlock()
+	if !refresh && d.catCache != nil && time.Since(d.catAt) < 10*time.Minute {
+		return d.catCache, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cat, err := d.serve.Catalog(ctx)
+	if err != nil {
+		if d.catCache != nil {
+			return d.catCache, nil
+		}
+		return nil, fmt.Errorf("serve catalog: %w", err)
+	}
+	d.catCache, d.catAt = cat, time.Now()
+	return cat, nil
+}
+
+// CompleteSlash proxies ranked slash/skill completions for the composer.
+func (d *Service) CompleteSlash(text, sessionID string) ([]hermes.Completion, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return d.serve.CompleteSlash(ctx, text, sessionID)
+}
+
+// ExecSlash runs one slash command against the open session. The command
+// engine addresses sessions by their LIVE runtime id; for a stored id we
+// resume once (minting a runtime), remember the mapping, and retry — the
+// same recovery the Hermes desktop performs.
+func (d *Service) ExecSlash(sessionID, command string) (*hermes.ExecResult, error) {
+	if sessionID == "" || strings.TrimSpace(command) == "" {
+		return nil, ErrEmpty
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	d.rtMu.Lock()
+	sid := d.runtimes[sessionID]
+	d.rtMu.Unlock()
+	if sid == "" {
+		sid = sessionID
+	}
+	res, err := d.serve.ExecSlash(ctx, sid, command)
+	var rpc *hermes.RPCError
+	if errors.As(err, &rpc) && rpc.Code == 4001 {
+		runtime, rerr := d.serve.Resume(ctx, sessionID)
+		if rerr != nil {
+			return nil, fmt.Errorf("serve exec: %w", err)
+		}
+		if runtime == "" {
+			runtime = sessionID
+		}
+		d.rtMu.Lock()
+		d.runtimes[sessionID] = runtime
+		d.rtMu.Unlock()
+		if runtime != sid {
+			res, err = d.serve.ExecSlash(ctx, runtime, command)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("serve exec: %w", err)
+	}
+	return res, nil
 }
 
 // GetTree fetches the full workstream tree from the hub (all profiles).

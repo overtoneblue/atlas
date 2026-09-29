@@ -4,6 +4,7 @@
 import { DataService } from "../../bindings/atlas/desktop";
 import { Events } from "@wailsio/runtime";
 import type { HubTree, Message, Session, SpawnList, Status as StatusT, TurnEvent } from "./types";
+import type { Catalog, Completion, ExecResult } from "./types";
 
 export async function Status(): Promise<StatusT> {
   return (await DataService.Status()) as StatusT;
@@ -56,6 +57,20 @@ export async function FetchSpawnLog(
   _lines: number,
 ): Promise<string> {
   return "";
+}
+
+// Slash-command surface isn't wired in the legacy shell; the palette
+// falls back to atlas-local commands only.
+export async function GetCommands(): Promise<Catalog> {
+  return { pairs: [], categories: [], commands: {}, skills: {} };
+}
+
+export async function CompleteSlash(_text: string, _sessionID: string): Promise<Completion[]> {
+  return [];
+}
+
+export async function ExecSlash(_sessionID: string, _command: string): Promise<ExecResult> {
+  return { output: "slash commands need the atlasd transport" };
 }
 
 export async function StopTurn(sessionID: string): Promise<void> {
