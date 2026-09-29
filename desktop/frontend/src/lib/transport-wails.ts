@@ -3,7 +3,7 @@
 
 import { DataService } from "../../bindings/atlas/desktop";
 import { Events } from "@wailsio/runtime";
-import type { HubTree, Message, Session, SpawnList, Status as StatusT, TurnEvent } from "./types";
+import type { HubTree, Message, Session, SpawnList, Status as StatusT, TurnEvent, TurnState } from "./types";
 import type { Catalog, Completion, ExecResult } from "./types";
 
 export async function Status(): Promise<StatusT> {
@@ -71,6 +71,16 @@ export async function CompleteSlash(_text: string, _sessionID: string): Promise<
 
 export async function ExecSlash(_sessionID: string, _command: string): Promise<ExecResult> {
   return { output: "slash commands need the atlasd transport" };
+}
+
+// No live-turn attach on the legacy shell (SSE-only surface).
+export async function FetchTurn(_sessionID: string): Promise<TurnState> {
+  return { active: false };
+}
+
+// Session deletion needs the atlasd transport.
+export async function DeleteSession(_profile: string, _sessionID: string): Promise<void> {
+  throw new Error("delete needs the atlasd shell");
 }
 
 export async function StopTurn(sessionID: string): Promise<void> {

@@ -47,7 +47,9 @@ func NewFromEnv() *Client {
 }
 
 // resolveProfileKeys reads ATLAS_API_KEY_<PROFILE> for secondary profiles from
-// the environment, then the per-user env file (env wins).
+// the environment, then the per-user env file, then each live profile home
+// ($HERMES_HOME/profiles/<p>/.env carries the profile's API_SERVER_KEY — the
+// same key its /p/<profile> gateway mount authenticates). First source wins.
 func resolveProfileKeys() map[string]string {
 	out := map[string]string{}
 	for _, kv := range os.Environ() {
@@ -63,6 +65,22 @@ func resolveProfileKeys() map[string]string {
 		if name, found := strings.CutPrefix(k, "ATLAS_API_KEY_"); found && name != "" {
 			if _, exists := out[strings.ToLower(name)]; !exists {
 				out[strings.ToLower(name)] = v
+			}
+		}
+	}
+	if home := hermesHomeDir(); home != "" {
+		if entries, err := os.ReadDir(filepath.Join(home, "profiles")); err == nil {
+			for _, e := range entries {
+				name := strings.ToLower(e.Name())
+				if !e.IsDir() || name == "" || name == "default" {
+					continue
+				}
+				if _, exists := out[name]; exists {
+					continue
+				}
+				if k := readEnvMap(filepath.Join(home, "profiles", e.Name(), ".env"))["API_SERVER_KEY"]; k != "" {
+					out[name] = k
+				}
 			}
 		}
 	}
@@ -239,6 +257,30 @@ func (c *Client) StopRun(ctx context.Context, profile, runID string) error {
 	return nil
 }
 
+// DeleteSession removes a session and its transcript from the profile's
+// store (DELETE /api/sessions/{id}).
+func (c *Client) DeleteSession(ctx context.Context, profile, id string) error {
+	key := c.KeyFor(profile)
+	if key == "" {
+		return fmt.Errorf("no API key configured for profile %q", profile)
+	}
+	u := fmt.Sprintf("%s%s/api/sessions/%s", c.BaseURL, apiPath(profile, ""), url.PathEscape(id))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("DELETE %s: HTTP %d", u, resp.StatusCode)
+	}
+	return nil
+}
+
 func (c *Client) get(ctx context.Context, u, key string, dst any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -256,8 +298,8 @@ func (c *Client) get(ctx context.Context, u, key string, dst any) error {
 	return json.NewDecoder(resp.Body).Decode(dst)
 }
 
-// hermesEnvPath is the active hermes home's .env (dev convenience).
-func hermesEnvPath() string {
+// hermesHomeDir is the active hermes home (HERMES_HOME or ~/.hermes).
+func hermesHomeDir() string {
 	root := os.Getenv("HERMES_HOME")
 	if root == "" {
 		home, err := os.UserHomeDir()
@@ -266,7 +308,15 @@ func hermesEnvPath() string {
 		}
 		root = filepath.Join(home, ".hermes")
 	}
-	return filepath.Join(root, ".env")
+	return root
+}
+
+// hermesEnvPath is the active hermes home's .env (dev convenience).
+func hermesEnvPath() string {
+	if root := hermesHomeDir(); root != "" {
+		return filepath.Join(root, ".env")
+	}
+	return ""
 }
 
 // readKeyFromEnvFile reads ATLAS_API_KEY or API_SERVER_KEY from KEY=VALUE lines.

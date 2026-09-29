@@ -74,6 +74,23 @@ export type Status = {
   api_url: string;
   hub_url: string;
   serve_url?: string;
+  // Live turns the daemon is currently running (attach targets).
+  turns?: { session: string; profile: string }[];
+};
+
+// Live-turn attach (atlasd GET /api/turn): a client opening mid-turn
+// hydrates its live view from this so the whole turn so far renders.
+export type TurnSegment = {
+  type: "text" | "tool";
+  text?: string;
+  name?: string;
+  state?: string;
+};
+export type TurnState = {
+  active: boolean;
+  session_id?: string;
+  profile?: string;
+  segments?: TurnSegment[];
 };
 
 // Slash-command surface (hermes-serve via atlasd): the catalog powers the

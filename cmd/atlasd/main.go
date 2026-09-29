@@ -64,6 +64,8 @@ func main() {
 	mux.HandleFunc("GET /api/spawn-log", api.spawnLog)
 	mux.HandleFunc("GET /api/sessions", api.sessions)
 	mux.HandleFunc("GET /api/messages", api.messages)
+	mux.HandleFunc("GET /api/turn", api.turn)
+	mux.HandleFunc("DELETE /api/session", api.deleteSession)
 	mux.HandleFunc("POST /api/send", api.send)
 	mux.HandleFunc("POST /api/stop", api.stop)
 	mux.HandleFunc("POST /api/attach", api.attach)
@@ -176,6 +178,44 @@ func (a *api) messages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, msgs)
+}
+
+// turn reports the live-turn snapshot for a session (clients attaching
+// mid-turn — app reopen, second window — hydrate from this).
+func (a *api) turn(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session is required"))
+		return
+	}
+	if snap := a.svc.TurnState(session); snap != nil {
+		writeJSON(w, map[string]any{
+			"active":     true,
+			"session_id": snap.SessionID,
+			"profile":    snap.Profile,
+			"segments":   snap.Segments,
+		})
+		return
+	}
+	writeJSON(w, map[string]any{"active": false})
+}
+
+// deleteSession removes one session from its profile's store.
+func (a *api) deleteSession(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	profile, session := q.Get("profile"), q.Get("session")
+	if profile == "" || session == "" {
+		writeError(w, http.StatusBadRequest, errors.New("profile and session are required"))
+		return
+	}
+	switch err := a.svc.DeleteSession(profile, session); {
+	case err == nil:
+		writeJSON(w, map[string]any{"ok": true, "deleted": session})
+	case errors.Is(err, daemon.ErrBusy):
+		writeError(w, http.StatusConflict, err)
+	default:
+		writeError(w, http.StatusBadGateway, err)
+	}
 }
 
 func (a *api) send(w http.ResponseWriter, r *http.Request) {

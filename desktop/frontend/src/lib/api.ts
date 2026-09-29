@@ -11,6 +11,7 @@ import type {
   Session,
   SpawnList,
   Status as StatusT,
+  TurnState,
 } from "./types";
 import { isWails } from "./transport";
 import * as http from "./transport-http";
@@ -67,3 +68,10 @@ export const GetSpawnLog = (
   task: number,
   lines: number,
 ): Promise<string> => t.FetchSpawnLog(kind, id, task, lines);
+
+// Live-turn attach: snapshot of a mid-flight turn (see types.TurnState).
+export const FetchTurn = (sessionID: string): Promise<TurnState> => t.FetchTurn(sessionID);
+
+// Delete a chat (session + transcript) from its profile's store.
+export const DeleteSession = (profile: string, sessionID: string): Promise<void> =>
+  t.DeleteSession(profile, sessionID);

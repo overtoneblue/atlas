@@ -15,6 +15,7 @@ import type {
   SpawnList,
   Status as StatusT,
   TurnEvent,
+  TurnState,
 } from "./types";
 
 const BASE: string = import.meta.env.VITE_ATLASD_URL ?? "";
@@ -54,6 +55,11 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
+async function del(path: string): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await errText(res));
+}
+
 export async function Status(): Promise<StatusT> {
   return get("/api/status");
 }
@@ -81,6 +87,19 @@ export async function GetMessages(
     `profile=${encodeURIComponent(profile)}&session=${encodeURIComponent(sessionID)}` +
     `&limit=${limit}&offset=${offset}&order=${order}&include_compacted=1`;
   return get(`/api/messages?${q}`);
+}
+
+// Live-turn snapshot: what (if anything) is streaming in a session right
+// now. A client attaching mid-turn paints the whole turn so far, then
+// continues on the event stream.
+export async function FetchTurn(sessionID: string): Promise<TurnState> {
+  return get(`/api/turn?session=${encodeURIComponent(sessionID)}`);
+}
+
+// Delete a session (and its transcript) from its profile's store.
+export async function DeleteSession(profile: string, sessionID: string): Promise<void> {
+  const q = `profile=${encodeURIComponent(profile)}&session=${encodeURIComponent(sessionID)}`;
+  await del(`/api/session?${q}`);
 }
 
 // message is either plain text or a content-parts array (text + image_url

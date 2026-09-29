@@ -68,6 +68,32 @@ type activeTurn struct {
 	deltas  int
 	chars   int
 	stopped bool
+
+	// segments mirrors the live-transcript shape the UI renders, so a
+	// client attaching mid-turn (app reopen, second window) gets the whole
+	// turn so far instead of only the deltas after it showed up.
+	segments []TurnSegment
+}
+
+// TurnSegment is one live-transcript block (assistant text or a tool row).
+type TurnSegment struct {
+	Type  string `json:"type"` // "text" | "tool"
+	Text  string `json:"text,omitempty"`
+	Name  string `json:"name,omitempty"`
+	State string `json:"state,omitempty"` // tool: running | done
+}
+
+// TurnState is the mid-turn snapshot served to late-attaching clients.
+type TurnState struct {
+	SessionID string        `json:"session_id"`
+	Profile   string        `json:"profile"`
+	Segments  []TurnSegment `json:"segments"`
+}
+
+// TurnBrief names one live turn (status payload).
+type TurnBrief struct {
+	Session string `json:"session"`
+	Profile string `json:"profile"`
 }
 
 func New() *Service {
@@ -141,15 +167,22 @@ func (d *Service) emit(ev TurnEvent) {
 
 // Status reports which upstreams are configured, for the status bar.
 type Status struct {
-	API      bool   `json:"api"`
-	Hub      bool   `json:"hub"`
-	Serve    bool   `json:"serve"`
-	APIURL   string `json:"api_url"`
-	HubURL   string `json:"hub_url"`
-	ServeURL string `json:"serve_url"`
+	API      bool        `json:"api"`
+	Hub      bool        `json:"hub"`
+	Serve    bool        `json:"serve"`
+	APIURL   string      `json:"api_url"`
+	HubURL   string      `json:"hub_url"`
+	ServeURL string      `json:"serve_url"`
+	Turns    []TurnBrief `json:"turns"`
 }
 
 func (d *Service) Status() Status {
+	d.mu.Lock()
+	turns := make([]TurnBrief, 0, len(d.turns))
+	for sid, t := range d.turns {
+		turns = append(turns, TurnBrief{Session: sid, Profile: t.profile})
+	}
+	d.mu.Unlock()
 	return Status{
 		API:      d.api.Configured(),
 		Hub:      d.hub.Configured(),
@@ -157,6 +190,7 @@ func (d *Service) Status() Status {
 		APIURL:   d.api.BaseURL,
 		HubURL:   d.hub.BaseURL,
 		ServeURL: d.serve.BaseURL,
+		Turns:    turns,
 	}
 }
 
@@ -324,6 +358,36 @@ func (d *Service) SendMessage(profile, sessionID string, input json.RawMessage) 
 	return nil
 }
 
+// TurnState returns the live snapshot for a session, nil when idle.
+func (d *Service) TurnState(sessionID string) *TurnState {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	turn, ok := d.turns[sessionID]
+	if !ok {
+		return nil
+	}
+	segs := make([]TurnSegment, len(turn.segments))
+	copy(segs, turn.segments)
+	return &TurnState{SessionID: sessionID, Profile: turn.profile, Segments: segs}
+}
+
+// DeleteSession removes one session from its profile's store. Refused while
+// a turn is live in it — deleting mid-turn strands state the run still needs.
+func (d *Service) DeleteSession(profile, sessionID string) error {
+	if !d.api.ConfiguredFor(profile) {
+		return errors.New("no API key for profile " + profile)
+	}
+	d.mu.Lock()
+	_, busy := d.turns[sessionID]
+	d.mu.Unlock()
+	if busy {
+		return ErrBusy
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return d.api.DeleteSession(ctx, profile, sessionID)
+}
+
 // emptyInput rejects null / blank-string / empty-array payloads.
 func emptyInput(input json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(input)
@@ -396,6 +460,36 @@ func (d *Service) stopRun(profile, runID string) error {
 	return d.api.StopRun(ctx, profile, runID)
 }
 
+// noteSegment folds one live event into the turn's snapshot buffer (capped
+// so a pathological turn can't grow memory without bound).
+func (d *Service) noteSegment(turn *activeTurn, seg TurnSegment) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	const maxSegs, maxText = 500, 1 << 18
+	if seg.Type == "text" && len(turn.segments) > 0 && turn.segments[len(turn.segments)-1].Type == "text" {
+		if len(turn.segments[len(turn.segments)-1].Text) < maxText {
+			turn.segments[len(turn.segments)-1].Text += seg.Text
+		}
+		return
+	}
+	turn.segments = append(turn.segments, seg)
+	if len(turn.segments) > maxSegs {
+		turn.segments = turn.segments[len(turn.segments)-maxSegs:]
+	}
+}
+
+// completeSegment marks the newest running tool row with this name as done.
+func (d *Service) completeSegment(turn *activeTurn, name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := len(turn.segments) - 1; i >= 0; i-- {
+		if s := turn.segments[i]; s.Type == "tool" && s.State == "running" && s.Name == name {
+			turn.segments[i].State = "done"
+			return
+		}
+	}
+}
+
 // runTurn consumes the SSE stream from the API server, relaying each event.
 func (d *Service) runTurn(ctx context.Context, turn *activeTurn, sessionID string, input json.RawMessage) {
 	defer func() {
@@ -425,14 +519,17 @@ func (d *Service) runTurn(ctx context.Context, turn *activeTurn, sessionID strin
 				if n == 1 || n%50 == 0 {
 					log.Printf("atlas:turn delta session=%s n=%d chars=%d", sessionID, n, chars)
 				}
+				d.noteSegment(turn, TurnSegment{Type: "text", Text: ev.Delta})
 				d.emit(TurnEvent{Kind: "delta", SessionID: sessionID, Text: ev.Delta})
 			}
 		case "tool.started":
 			if ev.ToolName != "" {
+				d.noteSegment(turn, TurnSegment{Type: "tool", Name: ev.ToolName, State: "running"})
 				d.emit(TurnEvent{Kind: "tool", SessionID: sessionID, Tool: ev.ToolName, ToolState: "running"})
 			}
 		case "tool.completed":
 			if ev.ToolName != "" {
+				d.completeSegment(turn, ev.ToolName)
 				d.emit(TurnEvent{Kind: "tool", SessionID: sessionID, Tool: ev.ToolName, ToolState: "done"})
 			}
 		}

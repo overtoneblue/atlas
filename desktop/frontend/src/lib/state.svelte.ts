@@ -136,6 +136,13 @@ export const actions = {
   async boot() {
     try {
       s.status = await api.Status();
+      // Live turns already in flight server-side: flag them now so the tree
+      // shows ◍ and opening one attaches mid-stream.
+      if (s.status?.turns?.length) {
+        const busy = { ...s.turnBusy };
+        for (const t of s.status.turns) busy[t.session] = true;
+        s.turnBusy = busy;
+      }
     } catch {
       s.status = null;
     }
@@ -338,9 +345,10 @@ export const actions = {
       if (s.open?.id !== id) return; // navigated away mid-flight
       s.messages = cleanMessages(msgs);
       s.olderOffset = msgs.length;
-      s.olderExhausted = msgs.length < MSG_PAGE;
+      s.olderExhausted = msgs.length === 0;
       s.paletteDismissed = null;
       s.statusText = `${s.messages.length} messages · ${id}`;
+      void this.attachTurn(id, profile);
     } catch (e: unknown) {
       s.messages = [];
       s.statusText = "transcript failed: " + errText(e);
@@ -358,10 +366,52 @@ export const actions = {
       if (s.open?.id !== open.id) return;
       s.messages = cleanMessages(msgs);
       s.olderOffset = msgs.length;
-      s.olderExhausted = msgs.length < MSG_PAGE;
+      s.olderExhausted = msgs.length === 0;
       s.autoScroll += 1;
     } catch {
       /* keep the current transcript on refresh failure */
+    }
+  },
+
+  // attachTurn hydrates a mid-turn session: when a turn is already
+  // streaming server-side (sent from another client, or started before an
+  // app reopen), the daemon replays the live buffer so this client shows
+  // the whole turn so far, then continues on the event stream.
+  async attachTurn(id: string, profile: string) {
+    try {
+      const t = await api.FetchTurn(id);
+      if (!t?.active || s.open?.id !== id) return;
+      s.live = {
+        session: id,
+        profile: t.profile ?? profile,
+        segments: (t.segments ?? []).map((g) =>
+          g.type === "tool"
+            ? ({ type: "tool", name: g.name ?? "?", state: g.state ?? "running" } as const)
+            : ({ type: "text", text: g.text ?? "" } as const),
+        ),
+        error: "",
+      };
+      s.turnBusy = { ...s.turnBusy, [id]: true };
+      s.autoScroll += 1;
+    } catch {
+      /* daemon without the endpoint / no live turn: nothing to attach */
+    }
+  },
+
+  // deletePost removes a chat for good ("✕" on a tree row, click twice to
+  // confirm). Refused server-side while a turn is live in that session.
+  async deletePost(sid: string, profile: string) {
+    try {
+      await api.DeleteSession(profile || "default", sid);
+      s.statusText = `deleted ${sid}`;
+      if (s.open?.id === sid) {
+        s.open = null;
+        s.messages = [];
+        s.live = null;
+      }
+      void this.refreshTree();
+    } catch (e: unknown) {
+      s.statusText = "delete failed: " + errText(e);
     }
   },
 
@@ -380,7 +430,9 @@ export const actions = {
       const msgs = await api.GetMessages(open.profile, open.id, MSG_PAGE, s.olderOffset, "latest");
       if (s.open?.id !== open.id) return; // navigated away mid-flight
       s.olderOffset += msgs.length;
-      if (msgs.length < MSG_PAGE) s.olderExhausted = true;
+      // A short page is normal at the archive boundary — only a truly
+      // empty read means history is exhausted.
+      if (msgs.length === 0) s.olderExhausted = true;
       const have = new Set(s.messages.map((m) => m.id));
       const older = cleanMessages(msgs).filter((m) => !have.has(m.id));
       if (older.length) {
