@@ -176,10 +176,14 @@ func (s *Serve) Resume(ctx context.Context, sessionID string) (string, error) {
 	// it the serve sends the session's full history in the reply — tens of MB
 	// for a long session, over our 4 MiB frame guard — and the refused frame
 	// surfaced as a bogus "session not found" (4001) on every exec retry.
+	// eager_build resolves the runtime identity synchronously so the FIRST
+	// command after binding reports the real model instead of "(unknown)"
+	// (the cold path builds the agent async, so the first exec races it).
 	if err := s.call(ctx, "session.resume", map[string]any{
 		"session_id":    sessionID,
 		"source":        "desktop",
 		"omit_messages": true,
+		"eager_build":   true,
 	}, &out); err != nil {
 		return "", err
 	}
