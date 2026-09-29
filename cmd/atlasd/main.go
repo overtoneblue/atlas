@@ -345,7 +345,15 @@ func webCacheHeaders(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
-			w.Header().Set("Cache-Control", "no-cache")
+			// Nix store paths carry epoch mtimes, so Go's file server
+			// answers every If-Modified-Since revalidation with 304 — a
+			// stale index.html + old asset graph gets pinned in client
+			// caches FOREVER (Electron disk cache, iOS home-screen apps).
+			// Strip validators and forbid storing: every load re-fetches,
+			// which also self-heals caches written before this fix.
+			w.Header().Set("Cache-Control", "no-store")
+			r.Header.Del("If-Modified-Since")
+			r.Header.Del("If-None-Match")
 		}
 		next.ServeHTTP(w, r)
 	})
