@@ -45,7 +45,11 @@ func (c *Client) ChatStream(ctx context.Context, profile, sessionID string, inpu
 	if key == "" {
 		return fmt.Errorf("no API key configured for profile %q", profile)
 	}
-	body, err := json.Marshal(map[string]json.RawMessage{"input": input})
+	// keep_run_on_disconnect: a dropped relay (deploy restart, sleeping phone)
+	// must not kill the turn — the run persists (transcript + run record) and
+	// the client re-attaches. Opt-in on the api_server; older gateways ignore
+	// the unknown key and keep their default behavior.
+	body, err := json.Marshal(map[string]any{"input": input, "keep_run_on_disconnect": true})
 	if err != nil {
 		return err
 	}
