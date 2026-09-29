@@ -245,7 +245,10 @@ func (d *Service) ExecSlash(sessionID, command string) (*hermes.ExecResult, erro
 	if errors.As(err, &rpc) && rpc.Code == 4001 {
 		runtime, rerr := d.serve.Resume(ctx, sessionID)
 		if rerr != nil {
-			return nil, fmt.Errorf("serve exec: %w", err)
+			// Surface BOTH legs: the exec 4001 is generic ("session not
+			// found") and the resume error names the real cause — masking it
+			// behind the exec error cost us a diagnosis once already.
+			return nil, fmt.Errorf("serve exec: %v; resume: %w", err, rerr)
 		}
 		if runtime == "" {
 			runtime = sessionID
