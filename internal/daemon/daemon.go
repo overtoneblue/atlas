@@ -273,6 +273,54 @@ func (d *Service) ExecSlash(sessionID, command string) (*hermes.ExecResult, erro
 	return res, nil
 }
 
+// ModelOptions returns the model-picker payload for a stored session,
+// bound to its live runtime (resumed on demand — the same binding exec
+// uses). The payload is passed through as the serve built it.
+func (d *Service) ModelOptions(sessionID string) (json.RawMessage, error) {
+	if sessionID == "" {
+		return nil, ErrEmpty
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	d.rtMu.Lock()
+	rt := d.runtimes[sessionID]
+	d.rtMu.Unlock()
+	if rt == "" {
+		resumed, err := d.serve.Resume(ctx, sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("serve models: resume: %w", err)
+		}
+		if resumed == "" {
+			resumed = sessionID
+		}
+		rt = resumed
+		d.rtMu.Lock()
+		d.runtimes[sessionID] = rt
+		d.rtMu.Unlock()
+	}
+	raw, err := d.serve.ModelOptions(ctx, rt)
+	var rpc *hermes.RPCError
+	if errors.As(err, &rpc) && rpc.Code == 4001 {
+		// Stale runtime: re-resume once, like ExecSlash.
+		resumed, rerr := d.serve.Resume(ctx, sessionID)
+		if rerr != nil {
+			return nil, fmt.Errorf("serve models: %v; resume: %w", err, rerr)
+		}
+		if resumed == "" {
+			resumed = sessionID
+		}
+		d.rtMu.Lock()
+		d.runtimes[sessionID] = resumed
+		d.rtMu.Unlock()
+		raw, err = d.serve.ModelOptions(ctx, resumed)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("serve models: %w", err)
+	}
+	return raw, nil
+}
+
 // GetTree fetches the full workstream tree from the hub (all profiles).
 func (d *Service) GetTree() (*hermes.HubTree, error) {
 	if !d.hub.Configured() {

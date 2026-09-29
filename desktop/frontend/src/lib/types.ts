@@ -125,6 +125,34 @@ export type ExecResult = {
   status?: string;
 };
 
+// model.options payload (hermes-serve `model.options`, proxied by atlasd).
+// `model`/`provider` are the session's current selection; `providers` rows
+// carry their model ids. Extra serve fields (pricing, capabilities, …) are
+// preserved for forward compatibility.
+export type ModelProviderRow = {
+  slug: string;
+  name?: string;
+  is_current?: boolean;
+  models?: string[];
+  total_models?: number;
+  [k: string]: unknown;
+};
+
+export type ModelOptions = {
+  model?: string;
+  provider?: string;
+  providers?: ModelProviderRow[];
+  [k: string]: unknown;
+};
+
+// One flattened picker row: a model id plus its owning provider.
+export type ModelRow = {
+  name: string;
+  slug: string;
+  meta: string;
+  current: boolean;
+};
+
 export type Row = {
   node: HubNode;
   key: string;

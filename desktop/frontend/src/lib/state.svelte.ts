@@ -13,6 +13,8 @@ import type {
   HubNode,
   LiveTurn,
   Message,
+  ModelOptions,
+  ModelRow,
   Row,
   Session,
   SpawnItem,
@@ -97,6 +99,9 @@ export const s = $state({
   paletteIdx: 0,
   paletteMoved: false, // user navigated the palette explicitly (arrows)
   paletteDismissed: null as string | null,
+  // /model picker: providers → models, fetched from the serve for the open
+  // session; the composer draft filters it while open.
+  modelPick: null as null | ModelPickState,
 });
 
 let chatScroller: HTMLDivElement | null = null;
@@ -347,6 +352,7 @@ export const actions = {
       s.olderOffset = msgs.length;
       s.olderExhausted = msgs.length === 0;
       s.paletteDismissed = null;
+      s.modelPick = null;
       s.statusText = `${s.messages.length} messages · ${id}`;
       void this.attachTurn(id, profile);
     } catch (e: unknown) {
@@ -746,6 +752,13 @@ export const actions = {
       s.statusText = "open a workstream first";
       return;
     }
+    // /model with no arguments lands in the picker (arrows/enter/esc on the
+    // list); every other command — /model with arguments included — execs
+    // on the serve exactly as before.
+    if (command.trim() === "/model") {
+      void this.openModelPicker();
+      return;
+    }
     s.statusText = `running ${command}…`;
     try {
       const res = await api.ExecSlash(open.id, command);
@@ -1063,6 +1076,77 @@ export const actions = {
     }
     void this.execCommand(it.text ?? it.name);
   },
+
+  // ---- model picker (/model) -------------------------------------------
+
+  // openModelPicker backs bare /model: fetch the provider/model payload for
+  // the open session and hand it to the composer as a selectable list. The
+  // draft seeds to "/model " so typing narrows the rows.
+  async openModelPicker() {
+    const open = s.open;
+    if (!open) {
+      s.statusText = "open a workstream first";
+      return;
+    }
+    s.modelPick = { session: open.id, rows: [], idx: 0, moved: false, loading: true, error: "" };
+    s.draft = "/model ";
+    this.setFocus("composer");
+    s.statusText = "loading models…";
+    try {
+      const payload = await api.FetchModels(open.id);
+      if (!s.modelPick || s.modelPick.session !== open.id) return; // closed or switched
+      s.modelPick = { ...s.modelPick, rows: flattenModels(payload), loading: false };
+      s.statusText = "";
+    } catch (e: unknown) {
+      if (!s.modelPick || s.modelPick.session !== open.id) return;
+      s.modelPick = { ...s.modelPick, loading: false, error: errText(e) };
+      s.statusText = "models failed: " + errText(e);
+    }
+  },
+
+  pickerMove(dir: number) {
+    const mp = s.modelPick;
+    if (!mp || mp.loading) return;
+    const n = modelPickRows(s.draft).length;
+    if (!n) return;
+    s.modelPick = { ...mp, moved: true, idx: ((mp.idx + dir) % n + n) % n };
+  },
+
+  pickerRun() {
+    const rows = modelPickRows(s.draft);
+    if (!rows.length) return;
+    const mp = s.modelPick;
+    if (!mp) return;
+    const at = Math.max(0, Math.min(mp.moved ? mp.idx : 0, rows.length - 1));
+    this.pickModel(rows[at]);
+  },
+
+  pickModelAt(i: number) {
+    const rows = modelPickRows(s.draft);
+    const row = rows[Math.max(0, Math.min(i, rows.length - 1))];
+    if (row) this.pickModel(row);
+  },
+
+  pickerClose() {
+    s.modelPick = null;
+    s.draft = "";
+    s.statusText = "";
+  },
+
+  // pickModel applies the desktop's exact switch contract: model first,
+  // provider pinned with --provider, session-scoped — a pick in one chat
+  // never rewrites the profile default. The result renders through the
+  // normal exec fold (✓ confirmation, or the rejection's suggestions).
+  pickModel(row: ModelRow) {
+    const open = s.open;
+    s.modelPick = null;
+    s.draft = "";
+    if (!open) return;
+    const cmd = row.slug
+      ? `/model ${row.name} --provider ${row.slug} --session`
+      : `/model ${row.name} --session`;
+    void this.execCommand(cmd);
+  },
 };
 
 // ---- command palette registry ----------------------------------------
@@ -1152,6 +1236,69 @@ export function paletteVisible(): boolean {
     s.paletteDismissed !== s.draft &&
     paletteItems(s.draft).length > 0
   );
+}
+
+// ---- model picker state ----------------------------------------------
+// The /model picker reuses the palette's row look, but owns its own list:
+// rows carry (model, provider) pairs so a pick dispatches the desktop's
+// exact switch syntax without the user typing it.
+
+export type ModelPickState = {
+  session: string;
+  rows: ModelRow[];
+  idx: number;
+  moved: boolean;
+  loading: boolean;
+  error: string;
+};
+
+// One row per (provider, model). The current provider sorts to the top so
+// its models are reachable without filtering; the current model is marked.
+function flattenModels(p: ModelOptions): ModelRow[] {
+  const curModel = (p.model ?? "").trim();
+  const curSlug = (p.provider ?? "").trim().toLowerCase();
+  const providers = (p.providers ?? [])
+    .slice()
+    .sort((a, b) => Number(!!b.is_current) - Number(!!a.is_current));
+  const rows: ModelRow[] = [];
+  for (const prov of providers) {
+    const slug = prov.slug ?? "";
+    const meta = prov.name ?? slug;
+    for (const m of prov.models ?? []) {
+      const name = String(m);
+      rows.push({
+        name,
+        slug,
+        meta,
+        current: curModel !== "" && name === curModel && (!curSlug || slug.toLowerCase() === curSlug),
+      });
+    }
+  }
+  return rows;
+}
+
+// Rows the picker shows for the current draft. The draft is always of the
+// shape "/model <filter>" while the picker is open; anything after the
+// command filters name/provider/meta matches.
+export function modelPickRows(draft: string): ModelRow[] {
+  const mp = s.modelPick;
+  if (!mp) return [];
+  const m = /^\/model\s*(.*)$/i.exec(draft);
+  const q = (m ? m[1] : draft).trim().toLowerCase();
+  const rows = q
+    ? mp.rows.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          r.slug.toLowerCase().includes(q) ||
+          r.meta.toLowerCase().includes(q),
+      )
+    : mp.rows;
+  return rows.slice(0, PALETTE_CAP);
+}
+
+// The picker owns the composer while open (composer INSERT focus).
+export function modelPickVisible(): boolean {
+  return s.focus === "composer" && s.mode === "INSERT" && s.modelPick !== null;
 }
 
 function countPosts(sections: HubNode[]): number {

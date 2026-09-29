@@ -193,6 +193,18 @@ func (s *Serve) Resume(ctx context.Context, sessionID string) (string, error) {
 	return out.Resumed, nil
 }
 
+// ModelOptions fetches the model-picker payload (providers + models +
+// current selection) for a live runtime id. The serve builds it from the
+// session's agent when one is bound, so callers should ensure the runtime
+// first — resumed sessions carry their per-session model overrides.
+func (s *Serve) ModelOptions(ctx context.Context, runtimeID string) (json.RawMessage, error) {
+	var out json.RawMessage
+	if err := s.call(ctx, "model.options", map[string]any{"session_id": runtimeID}, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // call runs one RPC on the shared connection. A connection that fails
 // before the request was written is transparently redialed once; a failure
 // after a successful write is surfaced as-is (retrying could double-run a

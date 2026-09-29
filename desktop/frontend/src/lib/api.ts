@@ -8,6 +8,7 @@ import type {
   ExecResult,
   HubTree,
   Message,
+  ModelOptions,
   Session,
   SpawnList,
   Status as StatusT,
@@ -58,8 +59,12 @@ export const GetSpawned = (): Promise<SpawnList> => t.FetchSpawned();
 export const GetCommands = (): Promise<Catalog> => t.GetCommands();
 export const CompleteSlash = (text: string, sessionID: string): Promise<Completion[]> =>
   t.CompleteSlash(text, sessionID);
+// Run one slash command against the open session (stored or runtime id).
 export const ExecSlash = (sessionID: string, command: string): Promise<ExecResult> =>
   t.ExecSlash(sessionID, command);
+
+// Model-picker payload (providers, models, current selection).
+export const FetchModels = (sessionID: string): Promise<ModelOptions> => t.FetchModels(sessionID);
 
 // Text tail of one spawned run's live log.
 export const GetSpawnLog = (

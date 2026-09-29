@@ -72,6 +72,7 @@ func main() {
 	mux.HandleFunc("GET /api/commands", api.commands)
 	mux.HandleFunc("GET /api/complete", api.complete)
 	mux.HandleFunc("POST /api/exec", api.exec)
+	mux.HandleFunc("GET /api/models", api.models)
 	mux.HandleFunc("GET /media", api.media)
 	mux.HandleFunc("GET /api/events", api.events)
 
@@ -216,6 +217,23 @@ func (a *api) deleteSession(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusBadGateway, err)
 	}
+}
+
+// models proxies the model-picker payload for the open session (providers,
+// models, current selection) from hermes-serve, bound to its live runtime.
+func (a *api) models(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session is required"))
+		return
+	}
+	raw, err := a.svc.ModelOptions(session)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(raw)
 }
 
 func (a *api) send(w http.ResponseWriter, r *http.Request) {

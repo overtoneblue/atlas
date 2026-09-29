@@ -779,6 +779,20 @@ button {
   color: var(--purple);
 }
 
+/* model picker rows: model name may be long — ellipsize, keep the
+   provider chip and provider name visible */
+.modelpick .pname {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcur {
+  color: var(--green);
+}
+
 .phint {
   padding: 6px 10px 4px;
   color: var(--faint);

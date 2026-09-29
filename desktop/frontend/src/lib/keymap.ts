@@ -4,7 +4,7 @@
 // NORMAL and consume on the next motion. Actions live in state.svelte.ts;
 // this file owns grammar only.
 
-import { s, actions, paletteVisible } from "./state.svelte";
+import { s, actions, modelPickVisible, paletteVisible } from "./state.svelte";
 
 export function installKeymap(): () => void {
   window.addEventListener("keydown", onKey, true);
@@ -71,6 +71,31 @@ function onKey(e: KeyboardEvent) {
   // Composer insert mode: let typing through, intercept only the
   // escape hatches. Enter sends, Shift+Enter is a newline.
   if (s.focus === "composer" && s.mode === "INSERT") {
+    // Model picker (/model): arrows pick, enter switches, esc closes.
+    // Typing flows through untouched — the draft filters the list.
+    if (modelPickVisible()) {
+      if (key === "ArrowDown" || (e.ctrlKey && key === "n")) {
+        e.preventDefault();
+        actions.pickerMove(1);
+        return;
+      }
+      if (key === "ArrowUp" || (e.ctrlKey && key === "p")) {
+        e.preventDefault();
+        actions.pickerMove(-1);
+        return;
+      }
+      if ((key === "Enter" && !e.shiftKey) || key === "Tab") {
+        e.preventDefault();
+        actions.pickerRun();
+        return;
+      }
+      if (key === "Escape") {
+        e.preventDefault();
+        actions.pickerClose();
+        return;
+      }
+      return;
+    }
     // Command palette: while the draft is a bare "/suffix", arrows pick,
     // enter/tab run, esc dismisses. Typing flows through untouched.
     if (paletteVisible()) {

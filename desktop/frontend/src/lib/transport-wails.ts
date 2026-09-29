@@ -4,7 +4,7 @@
 import { DataService } from "../../bindings/atlas/desktop";
 import { Events } from "@wailsio/runtime";
 import type { HubTree, Message, Session, SpawnList, Status as StatusT, TurnEvent, TurnState } from "./types";
-import type { Catalog, Completion, ExecResult } from "./types";
+import type { Catalog, Completion, ExecResult, ModelOptions } from "./types";
 
 export async function Status(): Promise<StatusT> {
   return (await DataService.Status()) as StatusT;
@@ -71,6 +71,11 @@ export async function CompleteSlash(_text: string, _sessionID: string): Promise<
 
 export async function ExecSlash(_sessionID: string, _command: string): Promise<ExecResult> {
   return { output: "slash commands need the atlasd transport" };
+}
+
+// The legacy shell has no model-options surface.
+export async function FetchModels(_sessionID: string): Promise<ModelOptions> {
+  return { providers: [] };
 }
 
 // No live-turn attach on the legacy shell (SSE-only surface).

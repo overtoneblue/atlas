@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { s, actions, paletteItems, paletteVisible } from "../state.svelte";
+  import { s, actions, modelPickRows, modelPickVisible, paletteItems, paletteVisible } from "../state.svelte";
   import { preLiftComposer } from "../mobile-viewport";
 
   let ta = $state<HTMLTextAreaElement | null>(null);
@@ -57,6 +57,30 @@
   onpaste={onPaste}
   role="presentation"
 >
+  {#if modelPickVisible() && s.modelPick}
+    <div class="palette modelpick">
+      {#if s.modelPick.loading}
+        <div class="phint">loading models…</div>
+      {:else if s.modelPick.error}
+        <div class="phint">models failed: {s.modelPick.error}</div>
+      {:else}
+        {#each modelPickRows(s.draft) as m, i}
+          <div
+            class="prow"
+            class:sel={i === s.modelPick.idx}
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => actions.pickModelAt(i)}
+            role="presentation"
+          >
+            <span class="pname">{m.name}{#if m.current}<span class="pcur"> ✓</span>{/if}</span>
+            <span class="pkind">{m.slug}</span>
+            <span class="pdesc">{m.meta}</span>
+          </div>
+        {/each}
+        <div class="phint">{modelPickRows(s.draft).length} models · ↑↓ pick · enter switch · esc close</div>
+      {/if}
+    </div>
+  {/if}
   {#if paletteVisible()}
     <div class="palette">
       {#each paletteItems(s.draft) as c, i}

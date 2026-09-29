@@ -11,6 +11,7 @@ import type {
   ExecResult,
   HubTree,
   Message,
+  ModelOptions,
   Session,
   SpawnList,
   Status as StatusT,
@@ -149,6 +150,12 @@ export async function CompleteSlash(text: string, sessionID: string): Promise<Co
 // Run one slash command against the open session (stored or runtime id).
 export async function ExecSlash(sessionID: string, command: string): Promise<ExecResult> {
   return postJSON<ExecResult>("/api/exec", { session: sessionID, command });
+}
+
+// Model-picker payload for a session: providers, their models, and the
+// current selection (the serve binds it to the session's live runtime).
+export async function FetchModels(sessionID: string): Promise<ModelOptions> {
+  return get(`/api/models?session=${encodeURIComponent(sessionID)}`);
 }
 
 // Text tail of one spawned run's live log (the hub shapes the path).
