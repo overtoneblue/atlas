@@ -77,6 +77,8 @@ func main() {
 	mux.HandleFunc("POST /api/send", api.send)
 	mux.HandleFunc("POST /api/stop", api.stop)
 	mux.HandleFunc("POST /api/restart", api.restartDaemon)
+	mux.HandleFunc("POST /api/hide", api.hide)
+	mux.HandleFunc("POST /api/new", api.newChat)
 	mux.HandleFunc("POST /api/attach", api.attach)
 	mux.HandleFunc("GET /api/commands", api.commands)
 	mux.HandleFunc("GET /api/complete", api.complete)
@@ -135,6 +137,42 @@ type api struct {
 	supervised bool       // a service manager will relaunch us
 	turns      func() int // live turns in this daemon (injectable for tests)
 	restart    func()     // exit for relaunch; wired in main
+}
+
+// hide sets/clears a chat's hidden flag — Atlas' archive: out of every list,
+// nothing deleted, fully resumable (the hidden view restores it).
+func (a *api) hide(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Profile string `json:"profile"`
+		Session string `json:"session"`
+		Hidden  bool   `json:"hidden"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Session == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session is required"))
+		return
+	}
+	if err := a.svc.HideSession(req.Profile, req.Session, req.Hidden); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "hidden": req.Hidden})
+}
+
+// newChat mints a fresh chat in a profile (the composer's /new).
+func (a *api) newChat(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Profile string `json:"profile"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if strings.TrimSpace(req.Profile) == "" {
+		req.Profile = "default"
+	}
+	session, err := a.svc.NewChat(req.Profile)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, map[string]any{"profile": req.Profile, "session": session})
 }
 
 // restartDaemon is the in-app `systemctl restart atlasd`. Guarded three ways:

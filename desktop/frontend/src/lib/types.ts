@@ -3,7 +3,7 @@
 // readable and independent of generator output.)
 
 export type SpawnItem = {
-  kind: "subagent" | "pi";
+  kind: "subagent" | "pi" | "debbie";
   id: string;
   profile?: string;
   parent?: string;
@@ -31,6 +31,7 @@ export type HubNode = {
   last_active?: number;
   message_count?: number;
   pinned?: boolean;
+  hidden?: boolean; // archived in Hermes (hidden flag) — Atlas renders it only in hidden view
   children?: HubNode[];
   // set only on synthetic "spawn" rows (client-built, nested under a post)
   spawn?: SpawnItem;

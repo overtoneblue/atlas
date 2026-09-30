@@ -124,6 +124,17 @@ export async function StopTurn(sessionID: string): Promise<void> {
   return post("/api/stop", { session: sessionID });
 }
 
+// Archive/unarchive a chat via Hermes' hidden flag (nothing is deleted;
+// hidden chats stay resumable and can be shown/restored from Atlas).
+export async function HideSession(profile: string, sessionID: string, hidden: boolean): Promise<void> {
+  return post("/api/hide", { profile, session: sessionID, hidden });
+}
+
+// Mint a fresh chat in a profile; the daemon returns its stored id.
+export async function NewChat(profile: string): Promise<{ profile: string; session: string }> {
+  return postJSON<{ profile: string; session: string }>("/api/new", { profile });
+}
+
 // Ask atlasd to exit so its supervisor (systemd) relaunches it — the in-app
 // `systemctl restart atlasd`. The custom header forces a CORS preflight, so a
 // stray web page can't fire it blind. 409 while turns are live unless forced.

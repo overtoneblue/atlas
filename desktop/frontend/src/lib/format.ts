@@ -35,7 +35,13 @@ function escQuotes(x: string): string {
 }
 
 function imgHTML(src: string, alt: string): string {
-  return `<img class="mdimg" src="${escAttr(src)}" alt="${escAttr(alt)}" loading="lazy" />`;
+  return (
+    `<span class="mdimgwrap"><img class="mdimg" src="${escAttr(src)}" alt="${escAttr(alt)}" loading="lazy" />` +
+    `<span class="mdimgtools">` +
+    `<button class="mdbtn" data-imgact="copy" title="copy image" aria-label="copy image">⧉</button>` +
+    `<button class="mdbtn" data-imgact="save" title="save image" aria-label="save image">⤓</button>` +
+    `</span></span>`
+  );
 }
 
 export function mdLite(src: string | undefined): string {
@@ -64,6 +70,17 @@ export function mdLite(src: string | undefined): string {
     const name = path.split("/").pop() || "image";
     return stash(imgHTML(`/media?path=${encodeURIComponent(path)}`, name));
   });
+  // Persisted user-attachment refs (@image:<path> — the desktop's canonical
+  // stored form, tui_gateway/session_history.py) render through the same relay.
+  s = s.replace(
+    /(^|[\s])@image:(`([^`\n]+)`|"([^"\n]+)"|'([^'\n]+)'|(\S+))/g,
+    (_m, pre: string, _whole: string, bt?: string, dq?: string, sq?: string, bare?: string) => {
+      const path = (bt ?? dq ?? sq ?? bare ?? "").replace(/[),;:]+$/, "");
+      if (path === "" || path[0] !== "/") return _m;
+      const name = path.split("/").pop() || "image";
+      return pre + stash(imgHTML(`/media?path=${encodeURIComponent(path)}`, name));
+    },
+  );
   s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, "$1<em>$2</em>");
   s = s.replace(

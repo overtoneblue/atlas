@@ -60,7 +60,7 @@ func NewHubFromEnv() *Hub {
 func (h *Hub) Configured() bool { return h != nil && h.Key != "" }
 
 func (h *Hub) FetchTree(ctx context.Context) (*HubTree, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.BaseURL+"/tree", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.BaseURL+"/tree?include_hidden=1", nil)
 	if err != nil {
 		return nil, err
 	}

@@ -68,6 +68,7 @@ SOURCE_LABELS = {
     "telegram": "Telegram",
     "matrix": "Matrix",
     "webhook": "Webhook",
+    "atlas": "Atlas",
 }
 
 
@@ -189,16 +190,19 @@ def find_session(session_id: str):
     return None, None
 
 
-def load_sessions(prof):
+def load_sessions(prof, include_hidden=False):
     con = sqlite3.connect(f"file:{prof['db']}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
         # Each db belongs to one profile; the default db additionally carries
         # legacy NULL-profile rows (pre-multiprofile sessions of the same profile).
+        where = "archived=0 AND (profile_name=? OR profile_name IS NULL)"
+        if not include_hidden:
+            where = "hidden=0 AND " + where
         return con.execute(
             "SELECT id, source, chat_id, chat_type, thread_id, display_name, title, "
-            "last_activity_at, message_count, pinned "
-            "FROM sessions WHERE hidden=0 AND archived=0 AND (profile_name=? OR profile_name IS NULL) "
+            "last_activity_at, message_count, pinned, hidden "
+            "FROM sessions WHERE " + where + " "
             "ORDER BY last_activity_at DESC",
             (prof["name"],),
         ).fetchall()
@@ -216,15 +220,16 @@ def post_node(row, prof):
         "last_active": row["last_activity_at"] or 0,
         "message_count": row["message_count"] or 0,
         "pinned": bool(row["pinned"]),
+        "hidden": bool(row["hidden"]),
     }
 
 
-def build_tree():
+def build_tree(include_hidden=False):
     errors = []
     sections = []
     for prof in PROFILES:
         try:
-            node = build_profile_section(prof, errors)
+            node = build_profile_section(prof, errors, include_hidden)
         except Exception as e:
             errors.append(f"profile {prof['name']}: {e}")
             continue
@@ -233,9 +238,9 @@ def build_tree():
     return {"generated_at": time.time(), "sections": sections, "errors": errors}
 
 
-def build_profile_section(prof, errors):
+def build_profile_section(prof, errors, include_hidden=False):
     """One profile's subtree: discord guilds + other sources, or None when empty."""
-    rows = load_sessions(prof)
+    rows = load_sessions(prof, include_hidden)
     discord_rows = [r for r in rows if r["source"] == "discord"]
     other_rows = [r for r in rows if r["source"] != "discord"]
 
@@ -501,6 +506,43 @@ def spawn_items():
     except OSError as e:
         errors.append(f"pi tasks: {e}")
 
+    # -- debbie dispatches (debbie-task wrapper; parent stamped like pi) ----
+    for prof in PROFILES:
+        ddir = os.path.join(prof["home"], "cache", "debbie-tasks")
+        try:
+            names = sorted(os.listdir(ddir))
+        except OSError:
+            continue
+        for name in names:
+            if not (name.startswith("debb-") and name.endswith(".meta")):
+                continue
+            tid = name[:-5]
+            meta = _read_kv(os.path.join(ddir, name))
+            parent = meta.get("parent_session", "")
+            pchat = meta.get("parent_chat", "")
+            if not parent and pchat:
+                parent = _session_for_thread(prof, pchat)
+            state, rc, completed = "running", None, 0.0
+            spath = os.path.join(ddir, tid + ".status")
+            try:
+                with open(spath) as f:
+                    rc = int((f.read().strip() or "0"))
+                state = "done" if rc == 0 else "failed"
+                completed = os.path.getmtime(spath)
+            except (OSError, ValueError):
+                pass
+            try:
+                started = float(meta.get("started", "") or 0)
+            except ValueError:
+                started = _parse_ts(meta.get("started", ""))
+            items.append({
+                "kind": "debbie", "id": tid, "profile": prof["name"],
+                "parent": parent, "parent_chat": pchat, "state": state,
+                "title": meta.get("title", "") or tid,
+                "started": started, "completed": completed, "tasks": 1,
+                "has_log": os.path.isfile(os.path.join(ddir, tid + ".log")), "rc": rc,
+            })
+
     items.sort(key=lambda it: -(it.get("started") or 0))
     return {"items": items, "errors": errors}
 
@@ -512,6 +554,12 @@ def spawn_log(kind, sid, task, lines):
     path = ""
     if sid.startswith("pi-") and all(c.isalnum() or c == "-" for c in sid):
         path = os.path.join(_pi_tasks_dir(), sid + ".log")
+    elif kind == "debbie" and sid.startswith("debb-") and all(c.isalnum() or c == "-" for c in sid):
+        for prof in PROFILES:
+            cand = os.path.join(prof["home"], "cache", "debbie-tasks", sid + ".log")
+            if os.path.isfile(cand):
+                path = cand
+                break
     elif kind == "subagent" and sid.startswith("deleg_") and all(c.isalnum() or c == "_" for c in sid):
         for prof in PROFILES:
             cand = os.path.join(_live_dir_root(prof), sid, "task-%d.log" % max(0, task or 0))
@@ -1010,7 +1058,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "unauthorized"})
                 return
             try:
-                self._json(200, build_tree())
+                from urllib.parse import parse_qs, urlparse
+
+                q = parse_qs(urlparse(self.path).query)
+                inc = (q.get("include_hidden") or ["0"])[0] == "1"
+                self._json(200, build_tree(inc))
             except Exception as e:
                 self._json(500, {"error": str(e)})
             return

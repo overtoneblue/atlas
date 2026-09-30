@@ -3,6 +3,7 @@
   import { s, actions } from "../state.svelte";
   import { mdLite, timeHM, toolGlyph, firstLine } from "../format";
   import { findRuntime } from "../find";
+  import { copyImageToClipboard, downloadImage, imageFileName } from "../imgtools";
 
   let scroller = $state<HTMLDivElement | null>(null);
   let findInput = $state<HTMLInputElement | null>(null);
@@ -211,10 +212,35 @@
     return i >= a && i <= b;
   }
 
-  // Pane-level click: transcript images open the zoom preview; anywhere
-  // else just takes focus.
+  // Transcript image actions: the copy/save buttons live inside the rendered
+  // markdown HTML, so clicks are delegated from the pane (the {@html} content
+  // can't carry Svelte handlers).
+  async function imgAction(act: string, img: HTMLImageElement) {
+    const name = imageFileName(img.src, img.alt);
+    if (act === "save") {
+      downloadImage(img.src, name);
+      s.statusText = `saving ${name}`;
+      return;
+    }
+    try {
+      await copyImageToClipboard(img.src);
+      s.statusText = "image copied to clipboard";
+    } catch {
+      s.statusText = "copy failed — use save instead";
+    }
+  }
+
+  // Pane-level click: the image tools act; a plain image opens the zoom
+  // preview; anywhere else just takes focus.
   function onPaneClick(e: MouseEvent) {
-    const el = e.target instanceof Element ? e.target.closest(".mdimg") : null;
+    const t = e.target instanceof Element ? e.target : null;
+    const btn = t?.closest(".mdbtn");
+    if (btn instanceof HTMLElement) {
+      const img = btn.closest(".mdimgwrap")?.querySelector("img");
+      if (img) void imgAction(btn.dataset.imgact ?? "", img);
+      return;
+    }
+    const el = t?.closest(".mdimg");
     if (el instanceof HTMLImageElement) {
       actions.openLightbox(el.src, el.alt, el);
       return;

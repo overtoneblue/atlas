@@ -315,6 +315,17 @@ function onKey(e: KeyboardEvent) {
       e.preventDefault();
       actions.scrollChat(-20 * n);
       break;
+    case "c":
+      // tree: a new chat right here; the composer takes focus
+      if (s.focus === "tree") {
+        e.preventDefault();
+        void actions.newChat();
+      }
+      break;
+    case "H":
+      e.preventDefault();
+      actions.toggleHiddenView();
+      break;
     default:
       break;
   }

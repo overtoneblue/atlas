@@ -1153,3 +1153,60 @@ button {
     max-height: 260px;
   }
 }
+
+/* ------- transcript image tools (copy / save) ------- */
+
+.mdimgwrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.mdimgtools {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: none;
+  gap: 4px;
+}
+
+.mdimgwrap:hover .mdimgtools {
+  display: flex;
+}
+
+.mdbtn {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: rgba(8, 6, 4, 0.78);
+  color: var(--fg-hi);
+  border: 1px solid var(--line);
+}
+
+.mdbtn:hover {
+  background: var(--sel);
+}
+
+@media (pointer: coarse) {
+  .mdimgtools {
+    display: flex;
+  }
+}
+
+.lb-tools {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  display: flex;
+  gap: 8px;
+  z-index: 60;
+}
+
+.lb-tools .mdbtn {
+  font-size: 13px;
+  padding: 5px 9px;
+}

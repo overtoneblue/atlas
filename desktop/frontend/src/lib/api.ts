@@ -49,6 +49,14 @@ export const AttachImage = (dataUrl: string): Promise<string> => t.AttachImage(d
 // falls back to detaching the stream when the run id is not yet known).
 export const StopTurn = (sessionID: string): Promise<void> => t.StopTurn(sessionID);
 
+// Archive/unarchive a chat (Hermes hidden flag — reversible, nothing deleted).
+export const HideSession = (profile: string, sessionID: string, hidden: boolean): Promise<void> =>
+  t.HideSession(profile, sessionID, hidden);
+
+// Mint a fresh chat in a profile (the /new command).
+export const NewChat = (profile: string): Promise<{ profile: string; session: string }> =>
+  t.NewChat(profile);
+
 // Restart the atlasd this UI is served by (its supervisor relaunches it).
 export const RestartDaemon = (force: boolean): Promise<void> => t.RestartDaemon(force);
 

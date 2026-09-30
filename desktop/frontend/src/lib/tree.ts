@@ -1,12 +1,14 @@
 // Tree visibility engine — a direct port of the TUI's rules:
+//  · hidden chats (Hermes' own hidden flag — Atlas' archive) render only in
+//    hidden view (`H`), and keep their row while they are the open chat
 //  · posts idle 7+ days are stowed when hideStale is on (containers left
 //    with nothing to show drop out entirely)
 //  · the OPEN chat is never stowed (ctx.keep): a stale chat opened on purpose
 //    — restored on boot, --open — must keep a row for the cursor to sit on
 //  · folded containers stay visible but hide their children (the stale pass
 //    ignores folds; folds apply afterwards)
-//  · spawned work (subagent runs, pi tasks) nests as child rows directly
-//    under its parent chat, state glyph included
+//  · spawned work (subagent runs, pi tasks, debbie dispatches) nests as child
+//    rows directly under its parent chat, state glyph included
 // Keys are stable name paths (parent/child) so folds survive tree refreshes.
 
 import type { HubNode, Row, Session, SpawnItem } from "./types";
@@ -23,6 +25,7 @@ export function isStale(node: HubNode, now: number): boolean {
 export type TreeCtx = {
   collapsed: Set<string>;
   hideStale: boolean;
+  hiddenView: boolean; // show chats archived via the hidden flag
   now: number;
   spawned: Record<string, SpawnItem[]>;
   keep?: string | null; // session id exempt from stowing (the open chat)
@@ -31,22 +34,27 @@ export type TreeCtx = {
 function spawnLabel(it: SpawnItem): string {
   const t = (it.title || it.id).replace(/\s+/g, " ").trim();
   const short = t.length > 64 ? t.slice(0, 61) + "…" : t;
-  return (it.kind === "pi" ? "pi · " : "subagent · ") + short;
+  const kind = it.kind === "pi" ? "pi · " : it.kind === "debbie" ? "debbie · " : "subagent · ";
+  return kind + short;
 }
 
 export function buildRows(
   sections: HubNode[],
   ctx: TreeCtx,
-): { rows: Row[]; hidden: number; total: number } {
+): { rows: Row[]; hidden: number; archived: number; total: number } {
   const rows: Row[] = [];
   let hidden = 0;
+  let archived = 0;
   let total = 0;
 
-  function project(node: HubNode, key: string, depth: number): { rows: Row[]; hidden: number } {
+  function project(node: HubNode, key: string, depth: number): { rows: Row[]; hidden: number; archived: number } {
     if (node.kind === "post") {
       total += 1;
       const kept = !!ctx.keep && node.session_id === ctx.keep;
-      if (ctx.hideStale && !kept && isStale(node, ctx.now)) return { rows: [], hidden: 1 };
+      if (node.hidden && !ctx.hiddenView && !kept) return { rows: [], hidden: 0, archived: 1 };
+      if (!node.hidden && ctx.hideStale && !kept && isStale(node, ctx.now)) {
+        return { rows: [], hidden: 1, archived: 0 };
+      }
       const out: Row[] = [{ node, key, depth }];
       const spawns = node.session_id ? ctx.spawned[node.session_id] : undefined;
       for (const it of spawns ?? []) {
@@ -56,38 +64,41 @@ export function buildRows(
           depth: depth + 1,
         });
       }
-      return { rows: out, hidden: 0 };
+      return { rows: out, hidden: 0, archived: 0 };
     }
     const kids = node.children ?? [];
     let kidRows: Row[] = [];
     let hid = 0;
+    let arch = 0;
     for (const k of kids) {
       const p = project(k, key + "/" + k.name, depth + 1);
       kidRows = kidRows.concat(p.rows);
       hid += p.hidden;
+      arch += p.archived;
     }
     if (kidRows.length === 0) {
-      // nothing left to show (empty, or everything stowed)
-      return { rows: [], hidden: hid };
+      // nothing left to show (empty, or everything stowed/hidden)
+      return { rows: [], hidden: hid, archived: arch };
     }
     const self: Row = { node, key, depth };
-    if (ctx.collapsed.has(key)) return { rows: [self], hidden: hid };
-    return { rows: [self].concat(kidRows), hidden: hid };
+    if (ctx.collapsed.has(key)) return { rows: [self], hidden: hid, archived: arch };
+    return { rows: [self].concat(kidRows), hidden: hid, archived: arch };
   }
 
   for (const s of sections) {
     const p = project(s, s.name, 0);
     rows.push(...p.rows);
     hidden += p.hidden;
+    archived += p.archived;
   }
-  return { rows, hidden, total };
+  return { rows, hidden, archived, total };
 }
 
 // Fallback: flat session list when the hub is down.
 export function buildSessionRows(
   sessions: Session[],
   ctx: TreeCtx,
-): { rows: Row[]; hidden: number; total: number } {
+): { rows: Row[]; hidden: number; archived: number; total: number } {
   const category: HubNode = {
     kind: "category",
     name: "RECENT SESSIONS",
@@ -98,6 +109,7 @@ export function buildSessionRows(
       profile: "default",
       last_active: s.last_active,
       message_count: s.message_count,
+      hidden: s.hidden,
     })),
   };
   return buildRows([category], ctx);

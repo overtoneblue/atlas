@@ -88,6 +88,15 @@ export async function DeleteSession(_profile: string, _sessionID: string): Promi
   throw new Error("delete needs the atlasd shell");
 }
 
+// Archive/new-chat need the atlasd shell.
+export async function HideSession(_profile: string, _sessionID: string, _hidden: boolean): Promise<void> {
+  throw new Error("hide needs the atlasd shell");
+}
+
+export async function NewChat(_profile: string): Promise<{ profile: string; session: string }> {
+  throw new Error("new chat needs the atlasd shell");
+}
+
 // Daemon restart needs the atlasd shell.
 export async function RestartDaemon(_force: boolean): Promise<void> {
   throw new Error("restart needs the atlasd shell");

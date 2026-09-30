@@ -112,6 +112,34 @@ func (s *Serve) ActiveList(ctx context.Context, profile string) ([]ActiveSession
 	return out.Sessions, nil
 }
 
+// SetHidden sets/clears a session's hidden flag — out of every Hermes list,
+// nothing deleted, still resumable by its owner. id may be the live runtime
+// id or the stored id (the latter updates the profile db tier).
+func (s *Serve) SetHidden(ctx context.Context, id, profile string, hidden bool) error {
+	params := map[string]any{"session_id": id, "hidden": hidden}
+	if profile != "" && profile != "default" {
+		params["profile"] = profile
+	}
+	return s.call(ctx, "session.set_hidden", params, nil)
+}
+
+// CreateSession mints a fresh live chat (source "atlas" files it under the
+// profile's Atlas channel in the tree) and returns its stored and runtime ids.
+func (s *Serve) CreateSession(ctx context.Context, profile string) (stored, runtime string, err error) {
+	params := map[string]any{"source": "atlas"}
+	if profile != "" && profile != "default" {
+		params["profile"] = profile
+	}
+	var out struct {
+		Runtime string `json:"session_id"`
+		Stored  string `json:"stored_session_id"`
+	}
+	if err := s.call(ctx, "session.create", params, &out); err != nil {
+		return "", "", err
+	}
+	return out.Stored, out.Runtime, nil
+}
+
 // CloseSession releases a live runtime (required before deleting it).
 func (s *Serve) CloseSession(ctx context.Context, runtimeID string) error {
 	return s.call(ctx, "session.close", map[string]any{"session_id": runtimeID}, nil)

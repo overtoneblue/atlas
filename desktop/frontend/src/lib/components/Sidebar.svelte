@@ -36,6 +36,7 @@
       return st === "running" ? "◍" : st;
     }
     if (r.node.kind === "post") {
+      if (r.node.hidden) return "⊘";
       if (actions.isBusy(r.node)) return "◍";
       return ageTag(r.node.last_active);
     }
@@ -46,7 +47,6 @@
   }
 
   let el = $state<HTMLElement | null>(null);
-  let confirmDel = $state<string | null>(null);
   $effect(() => {
     // keep the cursor row in view
     void s.cursor;
@@ -69,6 +69,7 @@
         class="row {r.node.kind}"
         class:sel={i === s.cursor}
         class:unread={r.node.kind === "post" && actions.isUnread(r.node)}
+        class:archived={r.node.kind === "post" && !!r.node.hidden}
         style={`--depth:${r.depth}`}
         onclick={() => {
           actions.setFocus("tree");
@@ -87,29 +88,20 @@
         {#if r.node.kind === "post" && r.node.session_id}
           <button
             class="del"
-            class:armed={confirmDel === r.node.session_id}
-            title={confirmDel === r.node.session_id
-              ? "click again to delete this chat"
-              : "delete chat"}
+            title={r.node.hidden ? "restore to the tree" : "hide from atlas (H shows hidden)"}
             onclick={(ev) => {
               ev.stopPropagation();
-              if (confirmDel === r.node.session_id) {
-                const sid = r.node.session_id!;
-                confirmDel = null;
-                void actions.deletePost(sid, r.node.profile ?? "default");
-              } else {
-                confirmDel = r.node.session_id!;
-              }
+              void actions.hidePost(r.node.session_id!, r.node.profile ?? "default", !r.node.hidden);
             }}
-            onmouseleave={() => (confirmDel = null)}
-          >{confirmDel === r.node.session_id ? "sure?" : "✕"}</button>
+          >{r.node.hidden ? "↺" : "⊘"}</button>
         {/if}
       </div>
     {/each}
   </div>
   <div class="side-foot">
-    {Math.max(0, s.postCount - s.hiddenCount)}/{s.postCount} posts{#if s.hiddenCount > 0}
-      · {s.hiddenCount} stowed{/if}{#if actions.unreadCount() > 0}
+    {Math.max(0, s.postCount - s.hiddenCount - s.archivedCount)}/{s.postCount} posts{#if s.hiddenCount > 0}
+      · {s.hiddenCount} stowed{/if}{#if s.archivedCount > 0}
+      · {s.archivedCount} hidden{/if}{#if actions.unreadCount() > 0}
       · <em>{actions.unreadCount()} unread</em>{/if}
   </div>
 </aside>
@@ -132,11 +124,15 @@
   }
   .row .del:hover {
     opacity: 1;
-    color: #e5484d;
+    color: var(--fg-hi);
   }
-  .row .del.armed {
-    opacity: 1;
-    color: #e5484d;
-    font-weight: 600;
+  .row.archived .del {
+    opacity: 0.8;
+  }
+  .row.archived .label {
+    opacity: 0.45;
+  }
+  .row.archived .glyph {
+    color: var(--faint);
   }
 </style>

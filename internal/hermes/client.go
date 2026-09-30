@@ -227,10 +227,30 @@ func (c *Client) MessagesPage(ctx context.Context, profile, id string, q Message
 		params.Set("include_compacted", "1")
 	}
 	u := fmt.Sprintf("%s%s/api/sessions/%s/messages?%s", c.BaseURL, apiPath(profile, ""), url.PathEscape(id), params.Encode())
-	if err := c.get(ctx, u, c.KeyFor(profile), &out); err != nil {
+	key := c.KeyFor(profile)
+	if key == "" {
+		return nil, fmt.Errorf("no API key configured for profile %q", profile)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
 		return nil, err
 	}
-	return out.Data, nil
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		// A freshly minted chat has no store row until its first message —
+		// that is an empty transcript, not a failure. Empty slice (not nil):
+		// nil marshals to null, which the UI would have to special-case.
+		return []Message{}, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: HTTP %d", u, resp.StatusCode)
+	}
+	return out.Data, json.NewDecoder(resp.Body).Decode(&out)
 }
 
 // StopRun interrupts a running agent turn (POST /v1/runs/{run_id}/stop).

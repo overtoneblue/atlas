@@ -28,6 +28,8 @@ import { tick } from "svelte";
 
 const LS_STALE = "atlas.hideStale";
 const LS_READ = "atlas.lastRead";
+const LS_DISP = "atlas.dispMode"; // transcript density, survives boots
+const LS_HIDDEN_VIEW = "atlas.showHidden"; // show hidden (archived) chats
 const LS_OPEN = "atlas.lastOpen"; // session id that was open when the app last ran
 const LS_BASE = "atlas.readBase"; // unread baseline (unix seconds)
 
@@ -50,6 +52,13 @@ function loadBase(): number {
   return now;
 }
 
+// Transcript density (0 full · 1 no reasoning · 2 exact tools · 3 quiet),
+// persisted so the chosen view mode survives a restart.
+function loadDispMode(): number {
+  const v = Number(localStorage.getItem(LS_DISP));
+  return Number.isInteger(v) && v >= 0 && v <= 3 ? v : 0;
+}
+
 export const s = $state({
   status: null as Status | null,
   sections: [] as HubNode[],
@@ -58,7 +67,9 @@ export const s = $state({
   cursor: 0,
   collapsed: [] as string[], // fold keys (stable name paths)
   hideStale: localStorage.getItem(LS_STALE) !== "0",
+  hiddenView: localStorage.getItem(LS_HIDDEN_VIEW) === "1",
   hiddenCount: 0,
+  archivedCount: 0,
   postCount: 0,
   open: null as { profile: string; id: string; title: string } | null,
   messages: [] as Message[],
@@ -86,7 +97,7 @@ export const s = $state({
   // parity toggles
   helpOpen: false,
   // display density cycle: 0 full | 1 no reasoning | 2 exact tools | 3 quiet
-  dispMode: 0,
+  dispMode: loadDispMode(),
   // slash-command surface (hermes-serve via atlasd)
   catalog: null as Catalog | null,
   catComplete: [] as Completion[], // live complete.slash items for catDraft
@@ -238,6 +249,7 @@ export const actions = {
     const ctx = {
       collapsed: new Set(s.collapsed),
       hideStale: s.hideStale,
+      hiddenView: s.hiddenView,
       now,
       spawned: s.spawned,
       keep: s.open?.id ?? null,
@@ -247,6 +259,7 @@ export const actions = {
       : buildSessionRows(s.sessions, ctx);
     s.rows = built.rows;
     s.hiddenCount = built.hidden;
+    s.archivedCount = built.archived;
     s.postCount = built.total;
     let idx = s.rows.findIndex((r) => r.key === cur);
     if (idx < 0) idx = Math.min(Math.max(0, s.cursor), Math.max(0, s.rows.length - 1));
@@ -347,6 +360,18 @@ export const actions = {
       : "showing all chats";
   },
 
+  // toggleHiddenView shows/hides chats archived via the hidden flag (`H`).
+  toggleHiddenView() {
+    s.hiddenView = !s.hiddenView;
+    localStorage.setItem(LS_HIDDEN_VIEW, s.hiddenView ? "1" : "0");
+    this.rebuild();
+    s.statusText = s.hiddenView
+      ? `showing hidden chats — ${s.archivedCount} archived, ↺ restores one`
+      : s.archivedCount > 0
+        ? `hiding ${s.archivedCount} archived chats — H shows them`
+        : "no hidden chats";
+  },
+
   // ---- transcript ------------------------------------------------------
 
   async openPost(node: HubNode) {
@@ -374,7 +399,7 @@ export const actions = {
     s.pendingCount = 0;
     this.markRead(id);
     try {
-      const msgs = await api.GetMessages(profile, id, MSG_PAGE, 0, "latest");
+      const msgs = (await api.GetMessages(profile, id, MSG_PAGE, 0, "latest")) ?? [];
       if (s.open?.id !== id) return; // navigated away mid-flight
       s.messages = cleanMessages(msgs);
       s.olderOffset = msgs.length;
@@ -401,7 +426,7 @@ export const actions = {
     const open = s.open;
     if (!open) return;
     try {
-      const msgs = await api.GetMessages(open.profile, open.id, MSG_PAGE, 0, "latest");
+      const msgs = (await api.GetMessages(open.profile, open.id, MSG_PAGE, 0, "latest")) ?? [];
       if (s.open?.id !== open.id) return;
       s.messages = cleanMessages(msgs);
       s.olderOffset = msgs.length;
@@ -437,22 +462,44 @@ export const actions = {
     }
   },
 
-  // deletePost removes a chat for good ("✕" on a tree row, click twice to
-  // confirm). Refused server-side while a turn is live in that session.
-  async deletePost(sid: string, profile: string) {
+  // hidePost archives a chat via Hermes' own hidden flag: out of every list,
+  // nothing deleted, and it stays fully resumable (H shows hidden chats in
+  // Atlas; ↺ on a row brings one back). Optimistic — the row flips now, the
+  // hub re-confirms on the next tree refresh.
+  async hidePost(sid: string, profile: string, hidden: boolean) {
+    const apply = (v: boolean) => {
+      const walk = (n: HubNode) => {
+        if (n.session_id === sid) n.hidden = v;
+        for (const k of n.children ?? []) walk(k);
+      };
+      for (const sec of s.sections) walk(sec);
+      const row = s.sessions.find((x) => x.id === sid);
+      if (row) row.hidden = v;
+      this.rebuild();
+    };
+    apply(hidden);
     try {
-      await api.DeleteSession(profile || "default", sid);
-      s.statusText = `deleted ${sid}`;
-      if (s.open?.id === sid) {
-        s.open = null;
-        s.messages = [];
-        s.live = null;
-      }
-      forgetOpen(sid);
-      delete s.drafts[sid];
-      void this.refreshTree();
+      await api.HideSession(profile || "default", sid, hidden);
+      s.statusText = hidden ? "hidden — H shows hidden chats" : "restored to the tree";
     } catch (e: unknown) {
-      s.statusText = "delete failed: " + errText(e);
+      apply(!hidden); // roll the optimistic flip back
+      s.statusText = "hide failed: " + errText(e);
+    }
+  },
+
+  // newChat mints a fresh chat through the daemon (serve session.create;
+  // source "atlas" files it under the profile's Atlas channel) and opens an
+  // empty composer on it. The tree row appears with the first message.
+  async newChat(profile?: string) {
+    const p = (profile ?? "").trim() || s.open?.profile || "default";
+    s.statusText = `creating a chat in ${p}…`;
+    try {
+      const r = await api.NewChat(p);
+      await this.openPost({ kind: "post", name: "(new chat)", session_id: r.session, profile: p });
+      this.setFocus("composer");
+      s.statusText = `new chat in ${p} — it joins the tree with your first message`;
+    } catch (e: unknown) {
+      s.statusText = "new chat failed: " + errText(e);
     }
   },
 
@@ -468,7 +515,7 @@ export const actions = {
     const prevH = el?.scrollHeight ?? 0;
     const prevTop = el?.scrollTop ?? 0;
     try {
-      const msgs = await api.GetMessages(open.profile, open.id, MSG_PAGE, s.olderOffset, "latest");
+      const msgs = (await api.GetMessages(open.profile, open.id, MSG_PAGE, s.olderOffset, "latest")) ?? [];
       if (s.open?.id !== open.id) return; // navigated away mid-flight
       s.olderOffset += msgs.length;
       // A short page is normal at the archive boundary — only a truly
@@ -635,6 +682,7 @@ export const actions = {
       "display: exact tool calls",
       "display: quiet — messages only",
     ][s.dispMode];
+    localStorage.setItem(LS_DISP, String(s.dispMode));
   },
 
   // loadCatalog warms the slash-command palette from hermes-serve.
@@ -932,6 +980,7 @@ export const actions = {
       case "started":
         if (openHere) {
           s.live = { session: sid, profile: ev.profile ?? "default", segments: [], error: "" };
+          s.autoScroll += 1; // the live block lands below the echo — follow it down
         }
         break;
       case "delta":
@@ -969,6 +1018,7 @@ export const actions = {
       case "error":
         if (openHere && s.live && s.live.session === sid) {
           s.live.error = ev.error ?? "error";
+          s.autoScroll += 1;
         }
         if (!openHere) s.statusText = `turn error in ${sid}: ${ev.error ?? "error"}`;
         break;
@@ -976,6 +1026,7 @@ export const actions = {
         if (openHere) {
           s.live = null;
           void this.refreshTranscript();
+          void this.refreshTree(); // a new chat's first row appears now
           s.statusText = ev.stopped
             ? "turn stopped"
             : ev.ok === false
@@ -1255,6 +1306,15 @@ export const COMMANDS: Command[] = [
     desc: "restart the atlas daemon + reload the UI (/restart force: even mid-turn)",
     run: (a) => void actions.restartDaemon(/^(force|-f|--force)$/i.test((a ?? "").trim())),
   },
+  { name: "/new", desc: "new chat in this profile · /new <profile> for another", run: (a) => void actions.newChat(a) },
+  {
+    name: "/hide",
+    desc: "hide the open chat (H shows hidden chats)",
+    run: () => {
+      const o = s.open;
+      if (o) void actions.hidePost(o.id, o.profile, true);
+    },
+  },
 ];
 
 // One palette row: local commands run client-side; hermes entries run via
@@ -1400,10 +1460,6 @@ function rememberOpen(id: string) {
 
 function rememberedOpen(): string {
   return localStorage.getItem(LS_OPEN) ?? "";
-}
-
-function forgetOpen(id: string) {
-  if (localStorage.getItem(LS_OPEN) === id) localStorage.removeItem(LS_OPEN);
 }
 
 // Every post, stowed or not (the visible rows omit stale chats), falling

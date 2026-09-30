@@ -519,6 +519,66 @@ func (d *Service) finishTurn(stored string, turn *activeTurn, errMsg string, int
 	d.emit(TurnEvent{Kind: "done", SessionID: stored, OK: errMsg == "", Stopped: stopped})
 }
 
+// ---- chat management (hide = archive in place; new = mint) -----------------
+
+// HideSession sets/clears a chat's hidden flag. The live runtime tier goes
+// first (serve's preferred order — covers drafts), the stored id second
+// (profile-db tier; what a never-bound chat needs).
+func (d *Service) HideSession(profile, sessionID string, hidden bool) error {
+	if !d.serve.Configured() {
+		return errors.New("hermes-serve is not configured (no session token)")
+	}
+	if sessionID == "" {
+		return ErrEmpty
+	}
+	if profile == "" {
+		profile = "default"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	d.rtMu.Lock()
+	rt := d.runtimes[sessionID]
+	d.rtMu.Unlock()
+	var firstErr error
+	if rt != "" {
+		if err := d.serve.SetHidden(ctx, rt, profile, hidden); err == nil {
+			return nil
+		} else {
+			firstErr = err
+		}
+	}
+	if err := d.serve.SetHidden(ctx, sessionID, profile, hidden); err == nil {
+		return nil
+	} else if firstErr == nil {
+		firstErr = err
+	}
+	return fmt.Errorf("set_hidden: %w", firstErr)
+}
+
+// NewChat mints a fresh chat in a profile and binds its live runtime, so the
+// first send goes straight to it. Returns the stored id the UI keys on.
+func (d *Service) NewChat(profile string) (string, error) {
+	if !d.serve.Configured() {
+		return "", errors.New("hermes-serve is not configured (no session token)")
+	}
+	if profile == "" {
+		profile = "default"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stored, runtime, err := d.serve.CreateSession(ctx, profile)
+	if err != nil {
+		return "", fmt.Errorf("session.create: %w", err)
+	}
+	d.noteProfile(stored, profile)
+	if runtime != "" {
+		d.rtMu.Lock()
+		d.bindRuntimeLocked(stored, runtime)
+		d.rtMu.Unlock()
+	}
+	return stored, nil
+}
+
 // ---- reconnect + stuck-turn recovery --------------------------------------
 
 // onServeReconnect runs after the serve connection was re-established: every

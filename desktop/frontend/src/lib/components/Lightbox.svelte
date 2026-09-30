@@ -4,6 +4,7 @@
   // back to it (close). Reduced motion gets a plain crossfade.
   import { tick } from "svelte";
   import { s, actions, lightboxRuntime } from "../state.svelte";
+  import { copyImageToClipboard, downloadImage, imageFileName } from "../imgtools";
 
   let imgEl = $state<HTMLImageElement | null>(null);
   let originEl: HTMLElement | null = null;
@@ -59,6 +60,22 @@
     setTimeout(() => actions.closeLightbox(), 240);
   }
 
+  async function act(a: "copy" | "save") {
+    const lb = s.lightbox;
+    if (!lb) return;
+    if (a === "save") {
+      downloadImage(lb.src, imageFileName(lb.src, lb.alt));
+      s.statusText = `saved ${imageFileName(lb.src, lb.alt)}`;
+      return;
+    }
+    try {
+      await copyImageToClipboard(lb.src);
+      s.statusText = "image copied to clipboard";
+    } catch {
+      s.statusText = "copy failed — use save instead";
+    }
+  }
+
   $effect(() => {
     lightboxRuntime.close = s.lightbox ? close : null;
     return () => {
@@ -70,5 +87,23 @@
 {#if s.lightbox}
   <div class="lb-scrim" onclick={() => actions.dismissLightbox()} role="presentation">
     <img bind:this={imgEl} class="lb-img" src={s.lightbox.src} alt={s.lightbox.alt} />
+    <div class="lb-tools">
+      <button
+        class="mdbtn"
+        title="copy image"
+        onclick={(e) => {
+          e.stopPropagation();
+          void act("copy");
+        }}>⧉ copy</button
+      >
+      <button
+        class="mdbtn"
+        title="save image"
+        onclick={(e) => {
+          e.stopPropagation();
+          void act("save");
+        }}>⤓ save</button
+      >
+    </div>
   </div>
 {/if}
