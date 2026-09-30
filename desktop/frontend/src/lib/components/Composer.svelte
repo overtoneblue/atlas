@@ -3,9 +3,21 @@
   import { preLiftComposer } from "../mobile-viewport";
 
   let ta = $state<HTMLTextAreaElement | null>(null);
+  let root = $state<HTMLElement | null>(null);
 
   // Phones: keep hints free of vim/desktop keybinds (touch only).
   const coarse = window.matchMedia("(pointer: coarse)").matches;
+
+  // Keep the selected row visible while arrowing through the palette / model
+  // picker (both lists can outgrow their box). block:"nearest" no-ops when
+  // the row is already in view.
+  $effect(() => {
+    void s.paletteIdx;
+    void s.modelPick?.idx;
+    void s.draft;
+    const sel = root?.querySelector<HTMLElement>(".prow.sel");
+    sel?.scrollIntoView({ block: "nearest" });
+  });
 
   $effect(() => {
     const shouldFocus = s.focus === "composer" && s.mode === "INSERT";
@@ -50,6 +62,7 @@
 </script>
 
 <div
+  bind:this={root}
   class="composer"
   class:active={s.focus === "composer"}
   class:insert={s.focus === "composer" && s.mode === "INSERT"}

@@ -27,6 +27,13 @@ function escAttr(x: string): string {
   return esc(x).replace(/"/g, "&quot;");
 }
 
+// The link passes below run on text esc() already entity-escaped, so a full
+// re-escape would double-encode URLs — but a raw " in a URL must still not
+// break out of the href attribute.
+function escQuotes(x: string): string {
+  return x.replace(/"/g, "&quot;");
+}
+
 function imgHTML(src: string, alt: string): string {
   return `<img class="mdimg" src="${escAttr(src)}" alt="${escAttr(alt)}" loading="lazy" />`;
 }
@@ -61,11 +68,13 @@ export function mdLite(src: string | undefined): string {
   s = s.replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, "$1<em>$2</em>");
   s = s.replace(
     /\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
-    '<a href="$2" target="_blank" rel="noreferrer">$1</a>',
+    (_m, label: string, url: string) =>
+      `<a href="${escQuotes(url)}" target="_blank" rel="noreferrer">${label}</a>`,
   );
   s = s.replace(
     /(^|[\s(])(https?:\/\/[^\s<)]+)/g,
-    '$1<a href="$2" target="_blank" rel="noreferrer">$2</a>',
+    (_m, pre: string, url: string) =>
+      `${pre}<a href="${escQuotes(url)}" target="_blank" rel="noreferrer">${url}</a>`,
   );
   s = s.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => blocks[+i] ?? "");
   return s;

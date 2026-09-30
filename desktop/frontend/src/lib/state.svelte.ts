@@ -69,6 +69,7 @@ export const s = $state({
   mode: "NORMAL" as "NORMAL" | "INSERT",
   statusText: "starting…",
   draft: "",
+  drafts: {} as Record<string, string>, // per-chat unsent drafts (in-memory)
   lastRead: loadRead(),
   readBase: loadBase(),
   autoScroll: 0, // bumped to force a scroll-to-bottom
@@ -352,9 +353,15 @@ export const actions = {
     const profile = node.profile ?? "default";
     const id = node.session_id ?? "";
     if (!id) return;
-    // Leaving a chat: whatever arrived while it was open was seen.
-    if (s.open && s.open.id !== id) this.markRead(s.open.id);
+    const switching = !s.open || s.open.id !== id;
+    // Leaving a chat: whatever arrived while it was open was seen, and an
+    // unsent draft stays with the chat it was typed in.
+    if (s.open && s.open.id !== id) {
+      this.markRead(s.open.id);
+      s.drafts[s.open.id] = s.draft;
+    }
     s.open = { profile, id, title: node.name };
+    if (switching) s.draft = s.drafts[id] ?? "";
     rememberOpen(id);
     // A stale chat opened on purpose (restored at boot, --open) must keep a
     // tree row for the cursor; rebuild() exempts the open chat from stowing.
@@ -377,11 +384,16 @@ export const actions = {
       s.statusText = `${s.messages.length} messages · ${id}`;
       void this.attachTurn(id, profile);
     } catch (e: unknown) {
+      // A stale failure must not clear the chat the user moved to; only the
+      // chat this load belongs to may report it.
+      if (s.open?.id !== id) return;
       s.messages = [];
       s.statusText = "transcript failed: " + errText(e);
     } finally {
-      s.loadingOpen = false;
-      s.autoScroll += 1;
+      if (s.open?.id === id) {
+        s.loadingOpen = false;
+        s.autoScroll += 1;
+      }
     }
   },
 
@@ -437,6 +449,7 @@ export const actions = {
         s.live = null;
       }
       forgetOpen(sid);
+      delete s.drafts[sid];
       void this.refreshTree();
     } catch (e: unknown) {
       s.statusText = "delete failed: " + errText(e);
@@ -469,7 +482,7 @@ export const actions = {
         if (el) el.scrollTop = prevTop + (el.scrollHeight - prevH);
       }
     } catch (e: unknown) {
-      s.statusText = "older messages failed: " + errText(e);
+      if (s.open?.id === open.id) s.statusText = "older messages failed: " + errText(e);
     } finally {
       s.loadingOlder = false;
     }
