@@ -43,8 +43,9 @@ type Serve struct {
 	BaseURL string
 	Token   string
 
-	mu   sync.Mutex
-	conn *wsConn
+	mu      sync.Mutex
+	conn    *wsConn
+	onEvent func(ServeEvent) // server->client event frames (set by Watch)
 }
 
 // NewServeFromEnv builds the serve client from the environment (see
@@ -167,30 +168,14 @@ func (s *Serve) ExecSlash(ctx context.Context, sessionID, command string) (*Exec
 // runtime id — the stored id is only the resume lookup key — so slash.exec
 // retries must rebind to the returned id.
 func (s *Serve) Resume(ctx context.Context, sessionID string) (string, error) {
-	var out struct {
-		SessionID string `json:"session_id"`
-		Resumed   string `json:"resumed"`
-	}
-	// omit_messages mirrors the desktop's REST-hydration resume: register the
-	// live runtime WITHOUT shipping the message blob over the socket. Without
-	// it the serve sends the session's full history in the reply — tens of MB
-	// for a long session, over our 4 MiB frame guard — and the refused frame
-	// surfaced as a bogus "session not found" (4001) on every exec retry.
-	// eager_build resolves the runtime identity synchronously so the FIRST
-	// command after binding reports the real model instead of "(unknown)"
-	// (the cold path builds the agent async, so the first exec races it).
-	if err := s.call(ctx, "session.resume", map[string]any{
-		"session_id":    sessionID,
-		"source":        "desktop",
-		"omit_messages": true,
-		"eager_build":   true,
-	}, &out); err != nil {
-		return "", err
-	}
-	if out.SessionID != "" {
-		return out.SessionID, nil
-	}
-	return out.Resumed, nil
+	info, err := s.ResumeWith(ctx, sessionID, "")
+	return info.Runtime, err
+}
+
+// resumeWire is the slice of session.resume's result Atlas reads.
+type resumeWire struct {
+	SessionID string `json:"session_id"`
+	Running   bool   `json:"running"`
 }
 
 // ModelOptions fetches the model-picker payload (providers + models +
@@ -242,7 +227,7 @@ func (s *Serve) getConn(ctx context.Context) (*wsConn, error) {
 	if s.conn != nil && !s.conn.isClosed() {
 		return s.conn, nil
 	}
-	c, err := dialWS(ctx, s.BaseURL, s.Token)
+	c, err := dialWS(ctx, s.BaseURL, s.Token, s.onEvent)
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +251,8 @@ const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 type wsConn struct {
 	nc net.Conn
 	br *bufio.Reader
+
+	onEvent func(ServeEvent) // called from readLoop: must never block or RPC
 
 	wmu sync.Mutex // one frame writer at a time
 
@@ -399,16 +386,30 @@ func (c *wsConn) readLoop() {
 	}
 }
 
-// deliver routes one complete text message to its waiting RPC by id;
-// messages without an id (server notifications) are ignored.
+// deliver routes one complete text message: a response goes to its waiting
+// RPC by id; an "event" notification goes to the event sink. Server->client
+// REQUESTS (string ids: approval/clarify/...) are ignored on purpose — Atlas
+// never declares client.capabilities, so serve fails those fast instead of
+// stalling the agent.
 func (c *wsConn) deliver(op byte, payload []byte) {
 	if op != 0x1 {
 		return
 	}
 	var head struct {
-		ID *int64 `json:"id"`
+		ID     *int64          `json:"id"`
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
 	}
-	if err := json.Unmarshal(payload, &head); err != nil || head.ID == nil {
+	if err := json.Unmarshal(payload, &head); err != nil {
+		return
+	}
+	if head.ID == nil {
+		if head.Method == "event" && c.onEvent != nil {
+			var ev ServeEvent
+			if json.Unmarshal(head.Params, &ev) == nil && ev.Type != "" {
+				c.onEvent(ev)
+			}
+		}
 		return
 	}
 	c.pmu.Lock()
@@ -516,7 +517,7 @@ func (c *wsConn) writeFrame(op byte, payload []byte) error {
 }
 
 // dialWS performs the HTTP upgrade against /api/ws.
-func dialWS(ctx context.Context, base, token string) (*wsConn, error) {
+func dialWS(ctx context.Context, base, token string, onEvent func(ServeEvent)) (*wsConn, error) {
 	u, err := url.Parse(base)
 	if err != nil {
 		return nil, fmt.Errorf("serve url: %w", err)
@@ -592,7 +593,7 @@ func dialWS(ctx context.Context, base, token string) (*wsConn, error) {
 	}
 	_ = nc.SetDeadline(time.Time{})
 
-	c := &wsConn{nc: nc, br: br, pending: map[int64]chan json.RawMessage{}, closed: make(chan struct{})}
+	c := &wsConn{nc: nc, br: br, onEvent: onEvent, pending: map[int64]chan json.RawMessage{}, closed: make(chan struct{})}
 	go c.readLoop()
 	go c.keepalive()
 	return c, nil

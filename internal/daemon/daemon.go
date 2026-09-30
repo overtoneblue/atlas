@@ -53,21 +53,24 @@ type Service struct {
 
 	// stored session id -> live runtime id in hermes-serve (resume mints
 	// one; commands address sessions by runtime id)
-	rtMu     sync.Mutex
-	runtimes map[string]string
+	rtMu      sync.Mutex
+	runtimes  map[string]string // stored -> runtime
+	byRuntime map[string]string // runtime -> stored (serve events name runtimes)
+	profileOf map[string]string // stored -> profile home it lives in
+	lastSeq   map[string]int64  // runtime -> newest serve event seq seen (replay dedupe)
 
 	initialSession string
 }
 
 // activeTurn is the bookkeeping for one in-flight agent turn.
 type activeTurn struct {
-	profile string
-	runID   string // arrives on run.started; needed for server-side stop
-	cancel  context.CancelFunc
-	done    chan struct{}
-	deltas  int
-	chars   int
-	stopped bool
+	profile   string
+	runtime   string // hermes-serve runtime session id this turn runs on
+	done      chan struct{}
+	deltas    int
+	chars     int
+	stopped   bool
+	lastEvent time.Time // watchdog: a turn that goes quiet gets re-checked
 
 	// segments mirrors the live-transcript shape the UI renders, so a
 	// client attaching mid-turn (app reopen, second window) gets the whole
@@ -104,6 +107,10 @@ func New() *Service {
 		turns:    make(map[string]*activeTurn),
 		subs:     make(map[int]chan TurnEvent),
 		runtimes: make(map[string]string),
+
+		byRuntime: make(map[string]string),
+		profileOf: make(map[string]string),
+		lastSeq:   make(map[string]int64),
 	}
 }
 
@@ -224,43 +231,25 @@ func (d *Service) CompleteSlash(text, sessionID string) ([]hermes.Completion, er
 }
 
 // ExecSlash runs one slash command against the open session. The command
-// engine addresses sessions by their LIVE runtime id; for a stored id we
-// resume once (minting a runtime), remember the mapping, and retry — the
-// same recovery the Hermes desktop performs.
+// engine addresses sessions by their LIVE runtime id; withRuntime resumes the
+// stored id (minting a runtime) and retries once on a stale one — the same
+// recovery the Hermes desktop performs.
 func (d *Service) ExecSlash(sessionID, command string) (*hermes.ExecResult, error) {
 	if sessionID == "" || strings.TrimSpace(command) == "" {
 		return nil, ErrEmpty
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-
-	d.rtMu.Lock()
-	sid := d.runtimes[sessionID]
-	d.rtMu.Unlock()
-	if sid == "" {
-		sid = sessionID
-	}
-	res, err := d.serve.ExecSlash(ctx, sid, command)
-	var rpc *hermes.RPCError
-	if errors.As(err, &rpc) && rpc.Code == 4001 {
-		runtime, rerr := d.serve.Resume(ctx, sessionID)
-		if rerr != nil {
-			// Surface BOTH legs: the exec 4001 is generic ("session not
-			// found") and the resume error names the real cause — masking it
-			// behind the exec error cost us a diagnosis once already.
-			return nil, fmt.Errorf("serve exec: %v; resume: %w", err, rerr)
-		}
-		if runtime == "" {
-			runtime = sessionID
-		}
-		d.rtMu.Lock()
-		d.runtimes[sessionID] = runtime
-		d.rtMu.Unlock()
-		if runtime != sid {
-			res, err = d.serve.ExecSlash(ctx, runtime, command)
-		}
-	}
+	var res *hermes.ExecResult
+	err := d.withRuntime(ctx, sessionID, nil, func(rt string) (e error) {
+		res, e = d.serve.ExecSlash(ctx, rt, command)
+		return e
+	})
 	if err != nil {
+		var re *resumeErr
+		if errors.As(err, &re) {
+			return nil, fmt.Errorf("serve exec: %w", err)
+		}
 		// An RPC error means the command engine answered (usage text like
 		// "/moa <prompt>", unknown-command hints, dead session) — that is
 		// transcript output, not a transport failure.
@@ -273,48 +262,20 @@ func (d *Service) ExecSlash(sessionID, command string) (*hermes.ExecResult, erro
 	return res, nil
 }
 
-// ModelOptions returns the model-picker payload for a stored session,
-// bound to its live runtime (resumed on demand — the same binding exec
-// uses). The payload is passed through as the serve built it.
+// ModelOptions returns the model-picker payload for a stored session, bound
+// to its live runtime (resumed on demand — the same binding exec uses). The
+// payload is passed through as the serve built it.
 func (d *Service) ModelOptions(sessionID string) (json.RawMessage, error) {
 	if sessionID == "" {
 		return nil, ErrEmpty
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-
-	d.rtMu.Lock()
-	rt := d.runtimes[sessionID]
-	d.rtMu.Unlock()
-	if rt == "" {
-		resumed, err := d.serve.Resume(ctx, sessionID)
-		if err != nil {
-			return nil, fmt.Errorf("serve models: resume: %w", err)
-		}
-		if resumed == "" {
-			resumed = sessionID
-		}
-		rt = resumed
-		d.rtMu.Lock()
-		d.runtimes[sessionID] = rt
-		d.rtMu.Unlock()
-	}
-	raw, err := d.serve.ModelOptions(ctx, rt)
-	var rpc *hermes.RPCError
-	if errors.As(err, &rpc) && rpc.Code == 4001 {
-		// Stale runtime: re-resume once, like ExecSlash.
-		resumed, rerr := d.serve.Resume(ctx, sessionID)
-		if rerr != nil {
-			return nil, fmt.Errorf("serve models: %v; resume: %w", err, rerr)
-		}
-		if resumed == "" {
-			resumed = sessionID
-		}
-		d.rtMu.Lock()
-		d.runtimes[sessionID] = resumed
-		d.rtMu.Unlock()
-		raw, err = d.serve.ModelOptions(ctx, resumed)
-	}
+	var raw json.RawMessage
+	err := d.withRuntime(ctx, sessionID, nil, func(rt string) (e error) {
+		raw, e = d.serve.ModelOptions(ctx, rt)
+		return e
+	})
 	if err != nil {
 		return nil, fmt.Errorf("serve models: %w", err)
 	}
@@ -377,36 +338,10 @@ func (d *Service) GetMessages(profile, sessionID string, q hermes.MessageQuery) 
 	if q.Offset < 0 {
 		q.Offset = 0
 	}
+	d.noteProfile(sessionID, profile)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	return d.api.MessagesPage(ctx, profile, sessionID, q)
-}
-
-// SendMessage starts one agent turn asynchronously. input is the raw JSON
-// `input` the chat endpoint accepts: a plain string, or a content-parts
-// array (text + image_url — native vision). Deltas and lifecycle updates
-// stream back on the event channel; the call returns immediately.
-func (d *Service) SendMessage(profile, sessionID string, input json.RawMessage) error {
-	if !d.api.ConfiguredFor(profile) {
-		return errors.New("no API key for profile " + profile)
-	}
-	if emptyInput(input) {
-		return ErrEmpty
-	}
-
-	d.mu.Lock()
-	if _, busy := d.turns[sessionID]; busy {
-		d.mu.Unlock()
-		return ErrBusy
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	turn := &activeTurn{profile: profile, cancel: cancel, done: make(chan struct{})}
-	d.turns[sessionID] = turn
-	d.mu.Unlock()
-
-	d.emit(TurnEvent{Kind: "started", SessionID: sessionID, Profile: profile})
-	go d.runTurn(ctx, turn, sessionID, input)
-	return nil
 }
 
 // TurnState returns the live snapshot for a session, nil when idle.
@@ -420,23 +355,6 @@ func (d *Service) TurnState(sessionID string) *TurnState {
 	segs := make([]TurnSegment, len(turn.segments))
 	copy(segs, turn.segments)
 	return &TurnState{SessionID: sessionID, Profile: turn.profile, Segments: segs}
-}
-
-// DeleteSession removes one session from its profile's store. Refused while
-// a turn is live in it — deleting mid-turn strands state the run still needs.
-func (d *Service) DeleteSession(profile, sessionID string) error {
-	if !d.api.ConfiguredFor(profile) {
-		return errors.New("no API key for profile " + profile)
-	}
-	d.mu.Lock()
-	_, busy := d.turns[sessionID]
-	d.mu.Unlock()
-	if busy {
-		return ErrBusy
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	return d.api.DeleteSession(ctx, profile, sessionID)
 }
 
 // emptyInput rejects null / blank-string / empty-array payloads.
@@ -458,57 +376,6 @@ func emptyInput(input json.RawMessage) bool {
 		}
 	}
 	return false
-}
-
-// StopTurn asks the API server to interrupt the session's in-flight run.
-// If the run id has not arrived yet, it waits briefly for it; failing that
-// it detaches the local stream (the run may finish server-side).
-func (d *Service) StopTurn(sessionID string) error {
-	d.mu.Lock()
-	turn, ok := d.turns[sessionID]
-	if !ok {
-		d.mu.Unlock()
-		return ErrNoTurn
-	}
-	runID := turn.runID
-	d.mu.Unlock()
-
-	if runID != "" {
-		if err := d.stopRun(turn.profile, runID); err != nil {
-			return err
-		}
-		d.mu.Lock()
-		turn.stopped = true
-		d.mu.Unlock()
-		return nil
-	}
-	go func() {
-		select {
-		case <-turn.done:
-			return
-		case <-time.After(2500 * time.Millisecond):
-		}
-		d.mu.Lock()
-		runID := turn.runID
-		profile := turn.profile
-		d.mu.Unlock()
-		if runID != "" {
-			if err := d.stopRun(profile, runID); err == nil {
-				d.mu.Lock()
-				turn.stopped = true
-				d.mu.Unlock()
-			}
-			return
-		}
-		turn.cancel() // detach; server-side run is left to finish
-	}()
-	return nil
-}
-
-func (d *Service) stopRun(profile, runID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	return d.api.StopRun(ctx, profile, runID)
 }
 
 // noteSegment folds one live event into the turn's snapshot buffer (capped
@@ -539,60 +406,4 @@ func (d *Service) completeSegment(turn *activeTurn, name string) {
 			return
 		}
 	}
-}
-
-// runTurn consumes the SSE stream from the API server, relaying each event.
-func (d *Service) runTurn(ctx context.Context, turn *activeTurn, sessionID string, input json.RawMessage) {
-	defer func() {
-		d.mu.Lock()
-		delete(d.turns, sessionID)
-		deltas, chars := turn.deltas, turn.chars
-		d.mu.Unlock()
-		close(turn.done)
-		log.Printf("atlas:turn done session=%s deltas=%d chars=%d", sessionID, deltas, chars)
-	}()
-
-	err := d.api.ChatStream(ctx, turn.profile, sessionID, input, func(ev hermes.ChatEvent) {
-		switch ev.Event {
-		case "run.started":
-			if ev.RunID != "" {
-				d.mu.Lock()
-				turn.runID = ev.RunID
-				d.mu.Unlock()
-			}
-		case "assistant.delta":
-			if ev.Delta != "" {
-				d.mu.Lock()
-				turn.deltas++
-				turn.chars += len(ev.Delta)
-				n, chars := turn.deltas, turn.chars
-				d.mu.Unlock()
-				if n == 1 || n%50 == 0 {
-					log.Printf("atlas:turn delta session=%s n=%d chars=%d", sessionID, n, chars)
-				}
-				d.noteSegment(turn, TurnSegment{Type: "text", Text: ev.Delta})
-				d.emit(TurnEvent{Kind: "delta", SessionID: sessionID, Text: ev.Delta})
-			}
-		case "tool.started":
-			if ev.ToolName != "" {
-				d.noteSegment(turn, TurnSegment{Type: "tool", Name: ev.ToolName, State: "running"})
-				d.emit(TurnEvent{Kind: "tool", SessionID: sessionID, Tool: ev.ToolName, ToolState: "running"})
-			}
-		case "tool.completed":
-			if ev.ToolName != "" {
-				d.completeSegment(turn, ev.ToolName)
-				d.emit(TurnEvent{Kind: "tool", SessionID: sessionID, Tool: ev.ToolName, ToolState: "done"})
-			}
-		}
-	})
-
-	ok := true
-	if err != nil && ctx.Err() == nil {
-		ok = false
-		d.emit(TurnEvent{Kind: "error", SessionID: sessionID, Error: err.Error()})
-	}
-	d.mu.Lock()
-	stopped := turn.stopped
-	d.mu.Unlock()
-	d.emit(TurnEvent{Kind: "done", SessionID: sessionID, OK: ok, Stopped: stopped})
 }

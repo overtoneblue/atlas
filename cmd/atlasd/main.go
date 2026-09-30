@@ -45,6 +45,7 @@ func main() {
 	}
 
 	svc := daemon.New()
+	svc.Start() // serve event stream + stuck-turn watchdog
 	if *openSession != "" {
 		svc.SetInitialSession(*openSession)
 	}
