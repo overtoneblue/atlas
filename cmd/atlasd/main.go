@@ -55,7 +55,14 @@ func main() {
 		log.Printf("atlasd: WARNING: binding %s (non-loopback) without authentication", *addr)
 	}
 
-	api := &api{svc: svc}
+	// Restart is only honest when something will bring us back: systemd sets
+	// INVOCATION_ID for every unit process. An atlasd spawned by an app shell
+	// (--die-with-parent) has no supervisor — exiting would just kill it.
+	api := &api{
+		svc:        svc,
+		supervised: !*dieParent && os.Getenv("INVOCATION_ID") != "",
+		turns:      func() int { return len(svc.Status().Turns) },
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", api.status)
 	mux.HandleFunc("GET /api/initial", api.initial)
@@ -68,6 +75,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/session", api.deleteSession)
 	mux.HandleFunc("POST /api/send", api.send)
 	mux.HandleFunc("POST /api/stop", api.stop)
+	mux.HandleFunc("POST /api/restart", api.restartDaemon)
 	mux.HandleFunc("POST /api/attach", api.attach)
 	mux.HandleFunc("GET /api/commands", api.commands)
 	mux.HandleFunc("GET /api/complete", api.complete)
@@ -89,6 +97,17 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Restart = exit non-zero after a beat (long enough for the 200 to reach
+	// the client). Non-zero on purpose: head's atlasd unit is Restart=on-failure,
+	// so a clean exit 0 would leave it down. No graceful Shutdown either —
+	// ListenAndServe would return first and main would exit 0. Live turns are
+	// refused up front, so all that drops here is SSE streams (which reconnect).
+	api.restart = func() {
+		time.Sleep(300 * time.Millisecond)
+		log.Printf("atlasd: restart requested — exiting %d for the supervisor to relaunch", restartExit)
+		os.Exit(restartExit)
+	}
+
 	// Clean shutdown on TERM/INT (kill from a shell, service managers).
 	go func() {
 		sig := make(chan os.Signal, 1)
@@ -106,7 +125,44 @@ func main() {
 	}
 }
 
-type api struct{ svc *daemon.Service }
+// restartExit is EX_TEMPFAIL: any non-zero code makes Restart=on-failure and
+// Restart=always units relaunch the daemon.
+const restartExit = 75
+
+type api struct {
+	svc        *daemon.Service
+	supervised bool       // a service manager will relaunch us
+	turns      func() int // live turns in this daemon (injectable for tests)
+	restart    func()     // exit for relaunch; wired in main
+}
+
+// restartDaemon is the in-app `systemctl restart atlasd`. Guarded three ways:
+// the custom header (a cross-origin page can't send it without a preflight,
+// which only loopback dev origins pass), supervision (never exit an atlasd
+// nothing will relaunch), and live turns (their in-daemon view would drop —
+// the runs keep going on head — unless force).
+func (a *api) restartDaemon(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Atlas-Action") != "restart" {
+		writeError(w, http.StatusForbidden, errors.New("missing X-Atlas-Action: restart"))
+		return
+	}
+	var req struct {
+		Force bool `json:"force"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req) // empty body = not forced
+	if !a.supervised {
+		writeError(w, http.StatusConflict, errors.New(
+			"this atlasd has no supervisor (started by hand or by an app shell) — restarting it would just kill it"))
+		return
+	}
+	if n := a.turns(); n > 0 && !req.Force {
+		writeError(w, http.StatusConflict, fmt.Errorf(
+			"%d turn(s) live — their live view would drop (the runs continue on head); /restart force overrides", n))
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "restarting": true})
+	go a.restart()
+}
 
 func (a *api) status(w http.ResponseWriter, r *http.Request)  { writeJSON(w, a.svc.Status()) }
 func (a *api) initial(w http.ResponseWriter, r *http.Request) { writeJSON(w, a.svc.InitialSession()) }
@@ -426,7 +482,7 @@ func withLoopbackCORS(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Add("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Atlas-Action")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

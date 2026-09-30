@@ -28,6 +28,8 @@ import { tick } from "svelte";
 
 const LS_STALE = "atlas.hideStale";
 const LS_READ = "atlas.lastRead";
+const LS_OPEN = "atlas.lastOpen"; // session id that was open when the app last ran
+const LS_BASE = "atlas.readBase"; // unread baseline (unix seconds)
 
 function loadRead(): Record<string, number> {
   try {
@@ -35,6 +37,17 @@ function loadRead(): Record<string, number> {
   } catch {
     return {};
   }
+}
+
+// Activity older than the first run of this client counts as seen, so a
+// fresh or upgraded client isn't a wall of unread dots for chats it never
+// opened. Only NEW activity after the baseline marks a chat unread.
+function loadBase(): number {
+  const v = Number(localStorage.getItem(LS_BASE));
+  if (v > 0) return v;
+  const now = Date.now() / 1000;
+  localStorage.setItem(LS_BASE, String(now));
+  return now;
 }
 
 export const s = $state({
@@ -57,6 +70,7 @@ export const s = $state({
   statusText: "starting…",
   draft: "",
   lastRead: loadRead(),
+  readBase: loadBase(),
   autoScroll: 0, // bumped to force a scroll-to-bottom
   // find (transcript search; DOM ranges live in the Transcript component)
   findOpen: false,
@@ -155,23 +169,23 @@ export const actions = {
     void this.refreshSpawned();
     void this.loadCatalog();
 
-    // Open target: --open session when present, else the first visible post.
-    let target: HubNode | null = null;
+    // Startup target, in order: --open (explicit) → the chat that was open
+    // when the app last ran → the freshest chat overall. Never "first row":
+    // the hub orders channels by Discord position, so that was simply
+    // whatever sat atop the first channel — the same old chat every launch.
+    // Focus and mode are left alone; the cursor is parked on the chat's row
+    // so j/k/enter carry on from where you left off.
+    let want = "";
     try {
-      const want = await api.InitialSession();
-      if (want) {
-        const row = s.rows.find((r) => r.node.session_id === want);
-        if (row) target = row.node;
-      }
+      want = await api.InitialSession();
     } catch {
       /* binding missing or unset */
     }
-    if (!target) {
-      target = s.rows.find((r) => r.node.kind === "post" && r.node.session_id)?.node ?? null;
-    }
+    const target =
+      (want ? lookupPost(want) : null) ?? lookupPost(rememberedOpen()) ?? freshestPost();
     if (target) {
       void this.openPost(target);
-      const idx = s.rows.findIndex((r) => r.node.session_id === target!.session_id);
+      const idx = s.rows.findIndex((r) => r.node.session_id === target.session_id);
       if (idx >= 0) s.cursor = idx;
     }
   },
@@ -225,6 +239,7 @@ export const actions = {
       hideStale: s.hideStale,
       now,
       spawned: s.spawned,
+      keep: s.open?.id ?? null,
     };
     const built = s.sections.length
       ? buildRows(s.sections, ctx)
@@ -337,7 +352,13 @@ export const actions = {
     const profile = node.profile ?? "default";
     const id = node.session_id ?? "";
     if (!id) return;
+    // Leaving a chat: whatever arrived while it was open was seen.
+    if (s.open && s.open.id !== id) this.markRead(s.open.id);
     s.open = { profile, id, title: node.name };
+    rememberOpen(id);
+    // A stale chat opened on purpose (restored at boot, --open) must keep a
+    // tree row for the cursor; rebuild() exempts the open chat from stowing.
+    if (!s.rows.some((r) => r.node.session_id === id)) this.rebuild();
     s.loadingOpen = true;
     s.visual = false;
     s.findOpen = false;
@@ -415,6 +436,7 @@ export const actions = {
         s.messages = [];
         s.live = null;
       }
+      forgetOpen(sid);
       void this.refreshTree();
     } catch (e: unknown) {
       s.statusText = "delete failed: " + errText(e);
@@ -639,11 +661,12 @@ export const actions = {
     // to hermes (e.g. "/model sonnet").
     const cmd = s.draft.trim();
     if (cmd.length > 1 && cmd.startsWith("/") && !cmd.startsWith("//")) {
-      const first = cmd.split(/\s+/, 1)[0].toLowerCase();
+      const parts = cmd.split(/\s+/);
+      const first = parts[0].toLowerCase();
       const local = COMMANDS.find((c) => c.name.toLowerCase() === first);
       this.clearPalette();
       if (local) {
-        local.run();
+        local.run(parts.slice(1).join(" "));
         return;
       }
       void this.execCommand(cmd);
@@ -715,6 +738,47 @@ export const actions = {
     } catch (e: unknown) {
       s.statusText = "stop failed: " + errText(e);
     }
+  },
+
+  // restartDaemon replaces `systemctl restart atlasd`: ask the daemon to exit
+  // (its supervisor relaunches it), wait until it has actually gone down and
+  // come back, then reload — which also pulls in a freshly deployed bundle.
+  // Refused while turns are live (their live view dies with the daemon; the
+  // runs themselves continue on head) unless forced.
+  async restartDaemon(force: boolean) {
+    s.statusText = "restarting atlasd…";
+    try {
+      await api.RestartDaemon(force);
+    } catch (e: unknown) {
+      const msg = errText(e);
+      s.statusText = "restart failed: " + msg;
+      this.pushNote(`/restart — ${msg}`);
+      return;
+    }
+    s.statusText = "atlasd restarting — waiting for it to come back…";
+    const t0 = Date.now();
+    let sawDown = false;
+    while (Date.now() - t0 < 60_000) {
+      await new Promise((r) => setTimeout(r, 400));
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(() => reject(new Error("timeout")), 1500);
+          api.Status().then(
+            () => (clearTimeout(t), resolve()),
+            (e) => (clearTimeout(t), reject(e)),
+          );
+        });
+        // Up. Trust it only after we saw it go down (the old process lingers
+        // ~2s while it drains) — or after long enough that it can't be.
+        if (sawDown || Date.now() - t0 > 12_000) {
+          location.reload();
+          return;
+        }
+      } catch {
+        sawDown = true;
+      }
+    }
+    s.statusText = "atlasd did not come back within 60s — check the service";
   },
 
   // ---- hermes slash commands (hermes-serve) ----------------------------
@@ -924,9 +988,12 @@ export const actions = {
 
   isUnread(node: HubNode): boolean {
     if (node.kind !== "post" || !node.session_id) return false;
+    if (node.session_id === s.open?.id) return false; // on screen right now
     const last = node.last_active ?? 0;
     if (last <= 0) return false;
-    return last * 1000 > (s.lastRead[node.session_id] ?? 0);
+    // Both sides are unix SECONDS (this compared last*1000 against seconds,
+    // so every chat read as unread forever).
+    return last > (s.lastRead[node.session_id] ?? s.readBase);
   },
 
   unreadCount(): number {
@@ -1157,7 +1224,7 @@ export const actions = {
 export interface Command {
   name: string;
   desc: string;
-  run: () => void;
+  run: (args?: string) => void;
 }
 
 export const COMMANDS: Command[] = [
@@ -1170,6 +1237,11 @@ export const COMMANDS: Command[] = [
   { name: "/stale", desc: "show/hide chats idle 7d+", run: () => actions.toggleStale() },
   { name: "/top", desc: "jump to the oldest loaded message", run: () => actions.scrollChatTo("top") },
   { name: "/bottom", desc: "jump to the newest message", run: () => actions.scrollChatTo("bottom") },
+  {
+    name: "/restart",
+    desc: "restart the atlas daemon + reload the UI (/restart force: even mid-turn)",
+    run: (a) => void actions.restartDaemon(/^(force|-f|--force)$/i.test((a ?? "").trim())),
+  },
 ];
 
 // One palette row: local commands run client-side; hermes entries run via
@@ -1299,6 +1371,65 @@ export function modelPickRows(draft: string): ModelRow[] {
 // The picker owns the composer while open (composer INSERT focus).
 export function modelPickVisible(): boolean {
   return s.focus === "composer" && s.mode === "INSERT" && s.modelPick !== null;
+}
+
+// ---- last-open memory + startup target lookup ---------------------------
+// The open chat is saved at OPEN time (not on quit): Electron can be killed
+// at any moment, and localStorage flushes within moments of a write.
+
+function rememberOpen(id: string) {
+  try {
+    localStorage.setItem(LS_OPEN, id);
+  } catch {
+    /* storage denied/full: restore is best-effort */
+  }
+}
+
+function rememberedOpen(): string {
+  return localStorage.getItem(LS_OPEN) ?? "";
+}
+
+function forgetOpen(id: string) {
+  if (localStorage.getItem(LS_OPEN) === id) localStorage.removeItem(LS_OPEN);
+}
+
+// Every post, stowed or not (the visible rows omit stale chats), falling
+// back to the flat session list when the hub is down.
+function allPosts(): HubNode[] {
+  const out: HubNode[] = [];
+  const walk = (n: HubNode) => {
+    if (n.kind === "post" && n.session_id) out.push(n);
+    for (const k of n.children ?? []) walk(k);
+  };
+  for (const sec of s.sections) walk(sec);
+  if (!out.length) {
+    for (const x of s.sessions) {
+      out.push({
+        kind: "post",
+        name: x.title || x.id,
+        session_id: x.id,
+        profile: "default",
+        last_active: x.last_active,
+        message_count: x.message_count,
+      });
+    }
+  }
+  return out;
+}
+
+// A chat that no longer exists (deleted) resolves to null and the caller
+// falls through to the next candidate.
+function lookupPost(id: string): HubNode | null {
+  if (!id) return null;
+  return allPosts().find((p) => p.session_id === id) ?? null;
+}
+
+function freshestPost(): HubNode | null {
+  let best: HubNode | null = null;
+  for (const p of allPosts()) {
+    if (!best || (p.last_active ?? 0) > (best.last_active ?? 0)) best = p;
+  }
+  return best;
 }
 
 function countPosts(sections: HubNode[]): number {

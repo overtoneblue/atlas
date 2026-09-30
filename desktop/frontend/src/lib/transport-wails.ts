@@ -88,6 +88,11 @@ export async function DeleteSession(_profile: string, _sessionID: string): Promi
   throw new Error("delete needs the atlasd shell");
 }
 
+// Daemon restart needs the atlasd shell.
+export async function RestartDaemon(_force: boolean): Promise<void> {
+  throw new Error("restart needs the atlasd shell");
+}
+
 export async function StopTurn(sessionID: string): Promise<void> {
   await DataService.StopTurn(sessionID);
 }

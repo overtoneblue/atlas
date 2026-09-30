@@ -49,6 +49,9 @@ export const AttachImage = (dataUrl: string): Promise<string> => t.AttachImage(d
 // falls back to detaching the stream when the run id is not yet known).
 export const StopTurn = (sessionID: string): Promise<void> => t.StopTurn(sessionID);
 
+// Restart the atlasd this UI is served by (its supervisor relaunches it).
+export const RestartDaemon = (force: boolean): Promise<void> => t.RestartDaemon(force);
+
 // The --open startup target (empty string when unset).
 export const InitialSession = (): Promise<string> => t.InitialSession();
 

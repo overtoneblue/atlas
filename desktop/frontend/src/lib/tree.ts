@@ -1,6 +1,8 @@
 // Tree visibility engine — a direct port of the TUI's rules:
 //  · posts idle 7+ days are stowed when hideStale is on (containers left
 //    with nothing to show drop out entirely)
+//  · the OPEN chat is never stowed (ctx.keep): a stale chat opened on purpose
+//    — restored on boot, --open — must keep a row for the cursor to sit on
 //  · folded containers stay visible but hide their children (the stale pass
 //    ignores folds; folds apply afterwards)
 //  · spawned work (subagent runs, pi tasks) nests as child rows directly
@@ -23,6 +25,7 @@ export type TreeCtx = {
   hideStale: boolean;
   now: number;
   spawned: Record<string, SpawnItem[]>;
+  keep?: string | null; // session id exempt from stowing (the open chat)
 };
 
 function spawnLabel(it: SpawnItem): string {
@@ -42,7 +45,8 @@ export function buildRows(
   function project(node: HubNode, key: string, depth: number): { rows: Row[]; hidden: number } {
     if (node.kind === "post") {
       total += 1;
-      if (ctx.hideStale && isStale(node, ctx.now)) return { rows: [], hidden: 1 };
+      const kept = !!ctx.keep && node.session_id === ctx.keep;
+      if (ctx.hideStale && !kept && isStale(node, ctx.now)) return { rows: [], hidden: 1 };
       const out: Row[] = [{ node, key, depth }];
       const spawns = node.session_id ? ctx.spawned[node.session_id] : undefined;
       for (const it of spawns ?? []) {

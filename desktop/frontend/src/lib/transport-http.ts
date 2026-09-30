@@ -124,6 +124,18 @@ export async function StopTurn(sessionID: string): Promise<void> {
   return post("/api/stop", { session: sessionID });
 }
 
+// Ask atlasd to exit so its supervisor (systemd) relaunches it — the in-app
+// `systemctl restart atlasd`. The custom header forces a CORS preflight, so a
+// stray web page can't fire it blind. 409 while turns are live unless forced.
+export async function RestartDaemon(force: boolean): Promise<void> {
+  const res = await fetch(`${BASE}/api/restart`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Atlas-Action": "restart" },
+    body: JSON.stringify({ force }),
+  });
+  if (!res.ok) throw new Error(await errText(res));
+}
+
 export async function InitialSession(): Promise<string> {
   const v = await get<string | null>("/api/initial");
   return v ?? "";
