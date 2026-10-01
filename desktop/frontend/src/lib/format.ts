@@ -103,22 +103,25 @@ export function firstLine(s: string | undefined, max = 110): string {
   return line.length > max ? line.slice(0, max - 1) + "…" : line;
 }
 
+// Monochrome marks, matching the app's glyph language (◍ ✓ ✗ ⊘ ↺ ◆ #) —
+// color emoji broke the warm-dark terminal aesthetic and rendered
+// differently per platform.
 const TOOL_GLYPHS: Record<string, string> = {
-  terminal: "💻",
-  close_terminal: "🖥️",
-  read_terminal: "🖥️",
-  patch: "🔧",
-  write_file: "📝",
-  read_file: "📖",
-  search_files: "🔍",
+  terminal: "$",
+  close_terminal: "$",
+  read_terminal: "$",
+  patch: "✎",
+  write_file: "✚",
+  read_file: "▤",
+  search_files: "⌕",
   delegate_task: "⤷",
-  discord: "⚙️",
-  web_search: "🌐",
-  web_extract: "🌐",
-  skill_view: "📚",
-  memory: "🧠",
+  discord: "⬡",
+  web_search: "◎",
+  web_extract: "◎",
+  skill_view: "✦",
+  memory: "◉",
 };
 
 export function toolGlyph(name: string | undefined): string {
-  return TOOL_GLYPHS[name ?? ""] ?? "⚙️";
+  return TOOL_GLYPHS[name ?? ""] ?? "·";
 }

@@ -3,6 +3,13 @@
   import { ageTag } from "../format";
   import type { Row } from "../types";
 
+  // Fold carets live in the leading glyph slot for every foldable row
+  // (category / channel / post-with-spawns); .tail is reserved for
+  // age/state, so the same action always sits in the same column.
+  function caret(r: Row): string {
+    return s.collapsed.includes(r.key) ? "▸" : "▾";
+  }
+
   function glyph(r: Row): string {
     if (r.node.kind === "spawn") {
       switch (r.node.spawn?.state) {
@@ -16,17 +23,21 @@
           return "·";
       }
     }
+    const foldable = (r.node.children?.length ?? 0) > 0;
     switch (r.node.kind) {
       case "profile":
         return "◆";
       case "guild":
         return "≡";
       case "category":
-        return s.collapsed.includes(r.key) ? "▸" : "▾";
+        return caret(r);
       case "channel":
-        return "#";
-      default:
+        return foldable ? caret(r) : "#";
+      case "post":
+        if (foldable) return caret(r); // spawned-work children
         return actions.isUnread(r.node) ? "●" : "·";
+      default:
+        return "·";
     }
   }
 
@@ -39,9 +50,6 @@
       if (r.node.hidden) return "⊘";
       if (actions.isBusy(r.node)) return "◍";
       return ageTag(r.node.last_active);
-    }
-    if (r.node.kind !== "category" && (r.node.children?.length ?? 0) > 0) {
-      return s.collapsed.includes(r.key) ? "▸" : "▾";
     }
     return "";
   }
@@ -64,6 +72,12 @@
 >
   <div class="pane-title">WORKSTREAMS</div>
   <div class="rows">
+    {#if !s.rows.length}
+      <div class="empty">
+        <div class="big">◇</div>
+        <div class="dim">nothing here yet — /category or /channel starts one</div>
+      </div>
+    {/if}
     {#each s.rows as r, i (r.key)}
       <div
         class="row {r.node.kind}"
@@ -169,7 +183,6 @@
   .row .del {
     all: unset;
     flex: none;
-    margin-left: 8px;
     padding: 0 5px;
     border-radius: 4px;
     font-size: 0.78em;
@@ -203,6 +216,12 @@
   .row .act:hover {
     opacity: 1;
     color: var(--fg-hi);
+  }
+  .row .act:focus-visible,
+  .row .del:focus-visible {
+    opacity: 1;
+    outline: 1px solid var(--yellow);
+    outline-offset: 0;
   }
   .row.spawn-running .glyph {
     color: var(--green);

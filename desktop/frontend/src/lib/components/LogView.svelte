@@ -6,6 +6,7 @@
   let scroller = $state<HTMLDivElement | null>(null);
   let text = $state("");
   let stick = true;
+  let logErr = $state(false);
 
   const item = $derived(s.logView?.item ?? null);
 
@@ -14,8 +15,9 @@
     if (!it) return;
     try {
       text = await api.GetSpawnLog(it.kind, it.id, 0, 600);
+      logErr = false;
     } catch {
-      /* keep the last good tail */
+      logErr = true; // keep the last good tail, say why it may be empty
     }
   }
 
@@ -66,7 +68,7 @@
       <span class="dim">{item.state} · {item.id}</span>
     </div>
     <div class="scroller logtext" bind:this={scroller} onscroll={onScroll}>
-      <pre>{text || "…"}</pre>
+      <pre>{text || (logErr ? "log unavailable" : "waiting for output…")}</pre>
     </div>
     <div class="log-foot dim">esc closes · live tail (2s)</div>
   </div>

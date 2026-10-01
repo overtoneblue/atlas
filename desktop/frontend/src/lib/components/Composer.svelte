@@ -112,7 +112,6 @@
       <div class="phint">↑↓ pick · enter run · esc dismiss</div>
     </div>
   {/if}
-  <span class="cbadge">{s.focus === "composer" && s.mode === "INSERT" ? "INSERT" : "NORMAL"}</span>
   <div class="cstack">
     {#if s.attachments.length}
       <div class="chips">
@@ -161,7 +160,8 @@
     <button
       onmousedown={(e) => e.preventDefault()}
       onclick={() => void actions.send()}
-      title="send (enter)">⏎</button
+      title="send (enter)"
+      aria-label="send">⏎</button
     >
   {/if}
 </div>

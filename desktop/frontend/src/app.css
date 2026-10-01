@@ -5,7 +5,15 @@
 @font-face {
   font-family: "Inter";
   src: url("/Inter-Medium.ttf") format("truetype");
-  font-weight: 100 900;
+  font-weight: 100 549;
+  font-display: swap;
+}
+
+/* real semibold for weight-600 elements (was synthesized from Medium) */
+@font-face {
+  font-family: "Inter";
+  src: url("/Inter-SemiBold.woff2") format("woff2");
+  font-weight: 550 900;
   font-display: swap;
 }
 
@@ -17,16 +25,21 @@
   --sel: #1b1613;
   --fg: #d8d0c0;
   --fg-hi: #f4ecdc;
-  --dim: #6b5b4d;
+  --dim: #867463; /* raised from #6b5b4d — chrome text at 3:1 -> ~4.4:1 */
   --dim2: #8a7a68;
   --faint: #6a5c4e; /* was #3a3229 — 1.6:1, illegible; now ~3.0:1 on surface */
+  --fg-2: #b8ab99; /* the one hard-coded post label — now a token */
+  --mono: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  --r-sm: 3px;
+  --r-md: 6px;
+  --r-lg: 10px;
   --red: #b06a63;
   --orange: #a88169;
   --yellow: #aa956d;
   --green: #728b72;
   --cyan: #748886;
   --blue: #6b8078;
-  --purple: #7d677e;
+  --purple: #9b7f9c; /* raised from #7d677e — author name at 4.1:1 -> ~5.9:1 */
 }
 
 * {
@@ -73,7 +86,7 @@ button {
 .app {
   height: var(--app-h, 100%);
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: clamp(300px, 24vw, 340px) 1fr;
   grid-template-rows: 1fr auto;
   grid-template-areas:
     "side main"
@@ -128,10 +141,10 @@ button {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 2px 8px 2px calc(10px + var(--depth) * 13px);
+  padding: 2px 8px 2px calc(10px + var(--depth) * 12px);
   border-radius: 3px;
   white-space: nowrap;
-  cursor: default;
+  cursor: pointer;
 }
 
 .row .glyph {
@@ -151,9 +164,13 @@ button {
 
 .row .tail {
   flex: none;
-  color: var(--faint);
+  color: var(--dim2);
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
+}
+
+.row:hover {
+  background: rgba(170, 149, 109, 0.05);
 }
 
 .row.sel {
@@ -189,7 +206,7 @@ button {
 }
 
 .row.post .label {
-  color: #b8ab99;
+  color: var(--fg-2);
 }
 
 .row.unread .glyph {
@@ -208,6 +225,9 @@ button {
   color: var(--dim);
   font-size: 12.5px;
   user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .side-foot em {
@@ -233,12 +253,20 @@ button {
   white-space: nowrap;
   color: var(--fg-hi);
   font-weight: 600;
-  font-size: 15.5px;
+  font-size: 17px;
+}
+
+.chat.focused .chat-head {
+  box-shadow: inset 2px 0 0 var(--yellow);
 }
 
 .chat-head .dim {
-  color: var(--faint);
+  color: var(--dim2);
   font-size: 12.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .scroller {
@@ -311,8 +339,9 @@ button {
 }
 
 .msg.agent .time {
-  color: var(--faint);
+  color: var(--dim2);
   font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .msg.agent .body {
@@ -333,7 +362,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 3px;
   padding: 0 4px;
-  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-family: var(--mono);
   font-size: 14px;
 }
 
@@ -347,7 +376,7 @@ button {
 }
 
 .msg .body pre.code code {
-  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-family: var(--mono);
   font-size: 14px;
   color: var(--fg);
 }
@@ -384,7 +413,7 @@ button {
   background: var(--surface2);
   border: 1px solid var(--line);
   border-radius: 4px;
-  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-family: var(--mono);
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--fg);
@@ -405,7 +434,7 @@ button {
 
 .note .ntext {
   margin: 0;
-  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-family: var(--mono);
   font-size: 13px;
   line-height: 1.55;
   color: var(--dim2);
@@ -432,23 +461,6 @@ button {
   background: var(--surface2);
 }
 
-.composer .cbadge {
-  flex: none;
-  font-size: 11.5px;
-  letter-spacing: 0.12em;
-  color: var(--dim);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 3px 6px;
-  margin-bottom: 4px;
-  user-select: none;
-}
-
-.composer.insert .cbadge {
-  color: var(--green);
-  border-color: var(--green);
-}
-
 .composer textarea {
   flex: 1;
   resize: none;
@@ -463,7 +475,7 @@ button {
 }
 
 .composer textarea::placeholder {
-  color: var(--faint);
+  color: var(--dim2);
 }
 
 .composer button {
@@ -522,8 +534,9 @@ button {
   flex: 1;
 }
 
-.statusbar .dots span {
-  margin-left: 8px;
+.statusbar .dots span::before {
+  content: "○ ";
+  color: var(--faint);
 }
 
 .statusbar .dots .ok::before {
@@ -536,9 +549,13 @@ button {
   color: var(--red);
 }
 
-.statusbar .hint,
 .statusbar .ver {
-  color: var(--faint);
+  color: var(--dim2);
+  cursor: pointer;
+}
+
+.statusbar .ver:hover {
+  color: var(--fg);
 }
 
 /* viewport debug readout (triple-tap the version) */
@@ -574,7 +591,7 @@ button {
 
 .logview .logtext pre {
   margin: 0;
-  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-family: var(--mono);
   font-size: 14px;
   line-height: 1.55;
   color: var(--fg);
@@ -664,7 +681,7 @@ button {
 }
 
 .findbar input::placeholder {
-  color: var(--faint);
+  color: var(--dim2);
 }
 
 .findbar .fcount {
@@ -686,12 +703,12 @@ button {
 /* ------- visual selection ------- */
 
 .msg.vs {
-  background: rgba(170, 149, 109, 0.07);
+  background: rgba(170, 149, 109, 0.10);
   box-shadow: inset 2px 0 0 var(--yellow);
 }
 
 .msg.vs.vcur {
-  background: rgba(170, 149, 109, 0.14);
+  background: rgba(170, 149, 109, 0.22);
 }
 
 .tool.vs {
@@ -707,7 +724,7 @@ button {
 .msg .imgs {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin: 2px 0 6px;
 }
 
@@ -751,6 +768,10 @@ button {
   cursor: pointer;
 }
 
+.prow:hover {
+  background: rgba(170, 149, 109, 0.08);
+}
+
 .prow.sel {
   background: rgba(170, 149, 109, 0.14);
 }
@@ -770,8 +791,8 @@ button {
   font-size: 11.5px;
   padding: 1px 6px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--faint);
+  border-radius: var(--r-sm);
+  color: var(--dim2);
   text-transform: lowercase;
 }
 
@@ -862,7 +883,7 @@ button {
 }
 
 .msg .reason pre.code code {
-  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-family: var(--mono);
   font-size: 14px;
   color: var(--fg);
 }
@@ -966,7 +987,7 @@ button {
   flex: none;
   width: 210px;
   color: var(--fg);
-  font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
+  font-family: var(--mono);
   font-size: 14px;
 }
 
@@ -1214,6 +1235,22 @@ button {
   padding: 5px 9px;
 }
 
+.mdbtn:focus-visible {
+  outline: 1px solid var(--yellow);
+  outline-offset: 1px;
+}
+
+/* ------- primary action polish ------- */
+
+.composer button:focus-visible {
+  outline: 1px solid var(--yellow);
+  outline-offset: 1px;
+}
+
+.composer button:active {
+  background: var(--sel);
+}
+
 /* ------- node forms (channel/category) + move picker ------- */
 
 .scrim {
@@ -1233,7 +1270,7 @@ button {
   overflow: auto;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--r-lg);
   padding: 16px 18px 14px;
   box-shadow: 0 20px 70px rgba(0, 0, 0, 0.65);
 }
@@ -1268,7 +1305,7 @@ button {
   width: 100%;
   background: var(--surface2);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--r-md);
   color: var(--fg);
   font: inherit;
   font-size: 15px;
@@ -1351,7 +1388,7 @@ button {
   gap: 8px;
   align-items: baseline;
   padding: 7px 8px;
-  border-radius: 6px;
+  border-radius: var(--r-md);
   cursor: pointer;
 }
 
@@ -1390,4 +1427,40 @@ button {
   font-size: 14px;
   color: var(--dim2);
   padding: 10px 8px;
+}
+
+/* ------- phones: touch targets + statusbar breathing room ------- */
+
+@media (pointer: coarse) {
+  .row {
+    min-height: 40px;
+    align-items: center;
+  }
+  .mnav {
+    min-height: 44px;
+  }
+  .chip .x {
+    width: 24px;
+    height: 24px;
+    line-height: 22px;
+  }
+}
+
+@media (max-width: 760px) {
+  .statusbar .dots {
+    display: none;
+  }
+  .statusbar .badge.mode {
+    display: inline-block;
+  }
+}
+
+@media (max-width: 600px) {
+  .help .hrow {
+    flex-direction: column;
+    gap: 2px;
+  }
+  .help .hk {
+    width: auto;
+  }
 }

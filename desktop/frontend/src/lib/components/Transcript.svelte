@@ -256,7 +256,7 @@
 >
   {#if s.open}
     <div class="chat-head">
-      <span class="title">{s.open.title}</span>
+      <span class="title" title={s.open.title}>{s.open.title}</span>
       <span class="dim">{s.open.id}</span>
     </div>
     {#if s.findOpen}
@@ -310,7 +310,13 @@
               {#if m.images?.length}
                 <div class="imgs">
                   {#each m.images as u}
-                    <img class="mdimg" src={u} alt="" />
+                    <span class="mdimgwrap">
+                      <img class="mdimg" src={u} alt="" />
+                      <span class="mdimgtools">
+                        <button class="mdbtn" data-imgact="copy" title="copy image">⧉ copy</button>
+                        <button class="mdbtn" data-imgact="save" title="save image">⤓ save</button>
+                      </span>
+                    </span>
                   {/each}
                 </div>
               {/if}
@@ -362,7 +368,10 @@
         </div>
       {/if}
       {#if s.messages.length === 0 && !s.loadingOpen && !s.live}
-        <div class="pad dim">empty conversation</div>
+        <div class="empty">
+          <div class="big">◆</div>
+          <div class="dim">no messages yet — i writes · / for commands</div>
+        </div>
       {/if}
     </div>
   {:else}

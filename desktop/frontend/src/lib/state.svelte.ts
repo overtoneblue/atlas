@@ -341,7 +341,7 @@ export const actions = {
 
   toggleFold(key: string) {
     const r = s.rows.find((x) => x.key === key);
-    if (!r || r.node.kind === "post") return;
+    if (!r || r.node.kind === "spawn") return;
     if (!(r.node.children ?? []).length) return;
     if (s.collapsed.includes(key)) {
       s.collapsed = s.collapsed.filter((k) => k !== key);
@@ -356,7 +356,7 @@ export const actions = {
 
   foldAt(collapse: boolean) {
     const r = s.rows[s.cursor];
-    if (!r || r.node.kind === "post" || r.node.kind === "spawn") return;
+    if (!r || r.node.kind === "spawn") return;
     if (!(r.node.children ?? []).length) return;
     const folded = s.collapsed.includes(r.key);
     if (collapse && !folded) this.toggleFold(r.key);
