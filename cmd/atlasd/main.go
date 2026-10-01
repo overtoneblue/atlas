@@ -79,6 +79,8 @@ func main() {
 	mux.HandleFunc("POST /api/restart", api.restartDaemon)
 	mux.HandleFunc("POST /api/hide", api.hide)
 	mux.HandleFunc("POST /api/new", api.newChat)
+	mux.HandleFunc("GET /api/channels", api.channels)
+	mux.HandleFunc("POST /api/chan", api.channelOp)
 	mux.HandleFunc("POST /api/attach", api.attach)
 	mux.HandleFunc("GET /api/commands", api.commands)
 	mux.HandleFunc("GET /api/complete", api.complete)
@@ -158,21 +160,59 @@ func (a *api) hide(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "hidden": req.Hidden})
 }
 
-// newChat mints a fresh chat in a profile (the composer's /new).
+// newChat mints a fresh chat in a profile (the composer's /new / tree `c`).
+// With a channel it inherits that channel's guidelines as a hidden context row.
 func (a *api) newChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Profile string `json:"profile"`
+		Channel string `json:"channel"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if strings.TrimSpace(req.Profile) == "" {
 		req.Profile = "default"
 	}
-	session, err := a.svc.NewChat(req.Profile)
+	session, warn, err := a.svc.NewChat(req.Profile, strings.TrimSpace(req.Channel))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, map[string]any{"profile": req.Profile, "session": session})
+	out := map[string]any{"profile": req.Profile, "session": session}
+	if warn != "" {
+		out["warning"] = warn
+	}
+	writeJSON(w, out)
+}
+
+// channels reads the native shape store (categories/channels/templates).
+func (a *api) channels(w http.ResponseWriter, r *http.Request) {
+	st, err := a.svc.Channels(r.URL.Query().Get("profile"))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, st)
+}
+
+// channelOp relays one store mutation (create|update|delete|assign).
+func (a *api) channelOp(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("bad JSON body"))
+		return
+	}
+	action, _ := body["action"].(string)
+	switch action {
+	case "create", "update", "delete", "assign":
+	default:
+		writeError(w, http.StatusBadRequest, errors.New("action must be create|update|delete|assign"))
+		return
+	}
+	res, err := a.svc.ChannelOp(action, body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, res)
 }
 
 // restartDaemon is the in-app `systemctl restart atlasd`. Guarded three ways:

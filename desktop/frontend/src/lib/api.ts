@@ -4,6 +4,7 @@
 
 import type {
   Catalog,
+  ChannelStore,
   Completion,
   ExecResult,
   HubTree,
@@ -53,9 +54,19 @@ export const StopTurn = (sessionID: string): Promise<void> => t.StopTurn(session
 export const HideSession = (profile: string, sessionID: string, hidden: boolean): Promise<void> =>
   t.HideSession(profile, sessionID, hidden);
 
-// Mint a fresh chat in a profile (the /new command).
-export const NewChat = (profile: string): Promise<{ profile: string; session: string }> =>
-  t.NewChat(profile);
+// Mint a fresh chat in a profile (the /new command). With a channel id the
+// chat is created inside that native channel and inherits its guidelines.
+export const NewChat = (
+  profile: string,
+  channel = "",
+): Promise<{ profile: string; session: string; warning?: string }> => t.NewChat(profile, channel);
+
+// Native shape store: categories / channels / guidelines / assignments.
+export const GetChannels = (profile: string): Promise<ChannelStore> => t.GetChannels(profile);
+
+// One store mutation (create|update|delete|assign).
+export const ChanOp = (body: Record<string, unknown>): Promise<Record<string, unknown>> =>
+  t.ChanOp(body);
 
 // Restart the atlasd this UI is served by (its supervisor relaunches it).
 export const RestartDaemon = (force: boolean): Promise<void> => t.RestartDaemon(force);

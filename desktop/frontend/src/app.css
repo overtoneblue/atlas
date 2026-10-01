@@ -19,7 +19,7 @@
   --fg-hi: #f4ecdc;
   --dim: #6b5b4d;
   --dim2: #8a7a68;
-  --faint: #3a3229;
+  --faint: #6a5c4e; /* was #3a3229 — 1.6:1, illegible; now ~3.0:1 on surface */
   --red: #b06a63;
   --orange: #a88169;
   --yellow: #aa956d;
@@ -55,7 +55,7 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: Inter, system-ui, -apple-system, sans-serif;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
@@ -107,7 +107,7 @@ button {
 
 .pane-title {
   padding: 10px 14px 8px;
-  font-size: 11px;
+  font-size: 12.5px;
   letter-spacing: 0.14em;
   color: var(--dim);
   user-select: none;
@@ -139,7 +139,7 @@ button {
   width: 14px;
   text-align: center;
   color: var(--dim);
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 .row .label {
@@ -152,7 +152,7 @@ button {
 .row .tail {
   flex: none;
   color: var(--faint);
-  font-size: 11px;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -206,7 +206,7 @@ button {
   padding: 8px 14px;
   border-top: 1px solid var(--line);
   color: var(--dim);
-  font-size: 11px;
+  font-size: 12.5px;
   user-select: none;
 }
 
@@ -233,12 +233,12 @@ button {
   white-space: nowrap;
   color: var(--fg-hi);
   font-weight: 600;
-  font-size: 13.5px;
+  font-size: 15.5px;
 }
 
 .chat-head .dim {
   color: var(--faint);
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 .scroller {
@@ -267,7 +267,7 @@ button {
 
 .empty .big {
   color: var(--yellow);
-  font-size: 20px;
+  font-size: 23px;
   letter-spacing: 0.06em;
 }
 
@@ -307,12 +307,12 @@ button {
 
 .msg.agent .who {
   font-weight: 600;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .msg.agent .time {
   color: var(--faint);
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 .msg.agent .body {
@@ -334,7 +334,7 @@ button {
   border-radius: 3px;
   padding: 0 4px;
   font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .msg .body pre.code {
@@ -348,7 +348,7 @@ button {
 
 .msg .body pre.code code {
   font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
-  font-size: 12px;
+  font-size: 14px;
   color: var(--fg);
 }
 
@@ -358,7 +358,7 @@ button {
   gap: 8px;
   padding: 2px 18px;
   color: var(--dim);
-  font-size: 11.5px;
+  font-size: 13px;
 }
 
 .tool .tname {
@@ -385,7 +385,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 4px;
   font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
-  font-size: 11px;
+  font-size: 12.5px;
   line-height: 1.5;
   color: var(--fg);
   white-space: pre-wrap;
@@ -396,7 +396,7 @@ button {
 
 /* local note rows (slash-command output) */
 .note {
-  margin: 8px 18px 8px 46px;
+  margin: 8px 18px 8px 30px;
   padding: 8px 12px;
   border-left: 2px solid var(--line);
   background: var(--surface2);
@@ -406,7 +406,7 @@ button {
 .note .ntext {
   margin: 0;
   font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.55;
   color: var(--dim2);
   white-space: pre-wrap;
@@ -434,7 +434,7 @@ button {
 
 .composer .cbadge {
   flex: none;
-  font-size: 10px;
+  font-size: 11.5px;
   letter-spacing: 0.12em;
   color: var(--dim);
   border: 1px solid var(--line);
@@ -492,7 +492,7 @@ button {
   padding: 4px 12px;
   background: var(--surface);
   border-top: 1px solid var(--line);
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--dim);
   user-select: none;
 }
@@ -575,7 +575,7 @@ button {
 .logview .logtext pre {
   margin: 0;
   font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.55;
   color: var(--fg);
   white-space: pre-wrap;
@@ -586,7 +586,7 @@ button {
   flex: none;
   padding: 6px 18px;
   border-top: 1px solid var(--line);
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 /* ------- live turns ------- */
@@ -669,7 +669,7 @@ button {
 
 .findbar .fcount {
   color: var(--dim);
-  font-size: 11px;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -762,12 +762,12 @@ button {
 
 .pdesc {
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .pkind {
   flex: none;
-  font-size: 10px;
+  font-size: 11.5px;
   padding: 1px 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -796,7 +796,7 @@ button {
 .phint {
   padding: 6px 10px 4px;
   color: var(--faint);
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 /* ------- image preview (lightbox) ------- */
@@ -832,6 +832,9 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .msg.live .live-tag {
+    animation: none;
+  }
   .lb-scrim {
     animation: none;
   }
@@ -841,7 +844,7 @@ button {
 
 .reason {
   color: var(--dim2);
-  font-size: 12px;
+  font-size: 14px;
   border-left: 2px solid var(--faint);
   padding: 2px 10px;
   margin: 4px 0;
@@ -860,7 +863,7 @@ button {
 
 .msg .reason pre.code code {
   font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
-  font-size: 12px;
+  font-size: 14px;
   color: var(--fg);
 }
 
@@ -902,7 +905,7 @@ button {
   border: 1px solid var(--line);
   background: var(--surface2);
   color: var(--fg);
-  font-size: 9px;
+  font-size: 10.5px;
   line-height: 1;
   cursor: pointer;
 }
@@ -948,7 +951,7 @@ button {
 
 .help .htitle {
   color: var(--yellow);
-  font-size: 11px;
+  font-size: 12.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   margin-bottom: 4px;
@@ -964,7 +967,7 @@ button {
   width: 210px;
   color: var(--fg);
   font-family: ui-monospace, "Maple Mono NF", "JetBrains Mono", monospace;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .help .hd {
@@ -1007,7 +1010,7 @@ button {
 
 @media (max-width: 760px) {
   body {
-    font-size: 14px;
+    font-size: 16px;
     -webkit-tap-highlight-color: transparent;
     overscroll-behavior-y: none;
   }
@@ -1100,7 +1103,7 @@ button {
   }
 
   .statusbar .ver {
-    font-size: 10px;
+    font-size: 11.5px;
     flex: none;
   }
 
@@ -1132,7 +1135,7 @@ button {
   }
 
   .composer textarea {
-    font-size: 16px;
+    font-size: 18px;
   }
 
   .composer button {
@@ -1178,7 +1181,7 @@ button {
   all: unset;
   box-sizing: border-box;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1;
   padding: 4px 6px;
   border-radius: 5px;
@@ -1207,6 +1210,184 @@ button {
 }
 
 .lb-tools .mdbtn {
-  font-size: 13px;
+  font-size: 15px;
   padding: 5px 9px;
+}
+
+/* ------- node forms (channel/category) + move picker ------- */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 9vh 16px 16px;
+}
+
+.nf-panel {
+  width: min(560px, 100%);
+  max-height: 82vh;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px 14px;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.65);
+}
+
+.nf-title {
+  font-size: 16px;
+  color: var(--fg-hi);
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.nf-dim {
+  color: var(--dim2);
+  font-weight: 400;
+}
+
+.nf-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+
+.nf-lab {
+  font-size: 14px;
+  color: var(--dim2);
+}
+
+.nf-input,
+.nf-ta,
+.nf-select {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 15px;
+  padding: 7px 9px;
+  outline: none;
+}
+
+.nf-input:focus,
+.nf-ta:focus,
+.nf-select:focus {
+  border-color: var(--dim2);
+}
+
+.nf-ta {
+  resize: vertical;
+  min-height: 120px;
+  line-height: 1.5;
+}
+
+.nf-hint {
+  font-size: 14px;
+  color: var(--dim2);
+  margin: -4px 0 12px;
+}
+
+.nf-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.nf-left {
+  margin-right: auto;
+}
+
+.nf-btn {
+  all: unset;
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  padding: 6px 13px;
+  border-radius: 6px;
+  background: var(--sel);
+  border: 1px solid var(--line);
+  color: var(--fg);
+}
+
+.nf-btn:hover {
+  border-color: var(--dim2);
+  color: var(--fg-hi);
+}
+
+.nf-btn.primary {
+  color: var(--fg-hi);
+  border-color: var(--dim2);
+}
+
+.nf-btn.primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.nf-btn.danger {
+  color: var(--red);
+}
+
+.mv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+  max-height: 52vh;
+  overflow: auto;
+}
+
+.mv-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 7px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mv-item:hover {
+  background: var(--sel);
+}
+
+.mv-glyph {
+  width: 14px;
+  flex: none;
+  color: var(--dim2);
+}
+
+.mv-cat {
+  font-size: 14px;
+  color: var(--dim2);
+  flex: none;
+  max-width: 38%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mv-name {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mv-detach {
+  color: var(--dim2);
+}
+
+.mv-empty {
+  font-size: 14px;
+  color: var(--dim2);
+  padding: 10px 8px;
 }

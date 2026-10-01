@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -154,6 +155,66 @@ func (h *Hub) FetchSpawnLog(ctx context.Context, kind, id string, task, lines in
 		return "", err
 	}
 	return out.Text, nil
+}
+
+// FetchChannels reads the native shape store (categories/channels/assignments)
+// for one profile.
+func (h *Hub) FetchChannels(ctx context.Context, profile string) (map[string]any, error) {
+	u := fmt.Sprintf("%s/channels?profile=%s", h.BaseURL, url.QueryEscape(profile))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if h.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+h.Key)
+	}
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET /channels: HTTP %d", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ChannelOp runs one store mutation (create|update|delete|assign). Validation
+// failures come back as the hub's own error string, ready to relay to the UI.
+func (h *Hub) ChannelOp(ctx context.Context, action string, body map[string]any) (map[string]any, error) {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.BaseURL+"/channels/"+action, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.Key)
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var e struct {
+			Error string `json:"error"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&e) == nil && e.Error != "" {
+			return nil, errors.New(e.Error)
+		}
+		return nil, fmt.Errorf("channels/%s: HTTP %d", action, resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // MirrorTurn relays a completed turn into the session's Discord thread with

@@ -556,19 +556,55 @@ func (d *Service) HideSession(profile, sessionID string, hidden bool) error {
 }
 
 // NewChat mints a fresh chat in a profile and binds its live runtime, so the
-// first send goes straight to it. Returns the stored id the UI keys on.
-func (d *Service) NewChat(profile string) (string, error) {
+// first send goes straight to it. With channelID set it also seeds the
+// channel's guidelines as a hidden model-facing context row (the Discord
+// forum-topic equivalent — the UI never paints it) and records the
+// assignment. Returns the stored id plus a non-fatal warning for the UI.
+func (d *Service) NewChat(profile, channelID string) (string, string, error) {
 	if !d.serve.Configured() {
-		return "", errors.New("hermes-serve is not configured (no session token)")
+		return "", "", errors.New("hermes-serve is not configured (no session token)")
 	}
 	if profile == "" {
 		profile = "default"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	stored, runtime, err := d.serve.CreateSession(ctx, profile)
+	var seed []map[string]any
+	if channelID != "" {
+		store, err := d.hub.FetchChannels(ctx, profile)
+		if err != nil {
+			return "", "", fmt.Errorf("channel lookup: %w", err)
+		}
+		chanName, template, catName := "", "", ""
+		for _, c := range hubList(store["channels"]) {
+			if hubStr(c["id"]) == channelID {
+				chanName = hubStr(c["name"])
+				template = strings.TrimSpace(hubStr(c["template"]))
+				catID := hubStr(c["category_id"])
+				for _, cc := range hubList(store["categories"]) {
+					if hubStr(cc["id"]) == catID {
+						catName = hubStr(cc["name"])
+						break
+					}
+				}
+				break
+			}
+		}
+		if chanName == "" {
+			return "", "", fmt.Errorf("channel %s not found", channelID)
+		}
+		if template != "" {
+			where := chanName
+			if catName != "" {
+				where = catName + " / " + chanName
+			}
+			content := "[Atlas channel context — auto-injected for every chat in this channel]\nChannel: " + where + "\n\n" + template
+			seed = []map[string]any{{"role": "system", "content": content, "display_kind": "hidden"}}
+		}
+	}
+	stored, runtime, err := d.serve.CreateSession(ctx, profile, seed)
 	if err != nil {
-		return "", fmt.Errorf("session.create: %w", err)
+		return "", "", fmt.Errorf("session.create: %w", err)
 	}
 	d.noteProfile(stored, profile)
 	if runtime != "" {
@@ -576,7 +612,55 @@ func (d *Service) NewChat(profile string) (string, error) {
 		d.bindRuntimeLocked(stored, runtime)
 		d.rtMu.Unlock()
 	}
-	return stored, nil
+	warn := ""
+	if channelID != "" {
+		if _, err := d.hub.ChannelOp(ctx, "assign", map[string]any{
+			"profile": profile, "session": stored, "channel_id": channelID,
+		}); err != nil {
+			warn = "channel assignment failed: " + err.Error()
+		}
+	}
+	return stored, warn, nil
+}
+
+// Channels reads the native shape store for one profile (categories,
+// channels, templates, assignments).
+func (d *Service) Channels(profile string) (map[string]any, error) {
+	if d.hub == nil || !d.hub.Configured() {
+		return nil, errors.New("atlas-hub is not configured")
+	}
+	if profile == "" {
+		profile = "default"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return d.hub.FetchChannels(ctx, profile)
+}
+
+// ChannelOp relays one store mutation to the hub.
+func (d *Service) ChannelOp(action string, body map[string]any) (map[string]any, error) {
+	if d.hub == nil || !d.hub.Configured() {
+		return nil, errors.New("atlas-hub is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return d.hub.ChannelOp(ctx, action, body)
+}
+
+func hubList(v any) []map[string]any {
+	lst, _ := v.([]any)
+	out := make([]map[string]any, 0, len(lst))
+	for _, it := range lst {
+		if m, ok := it.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func hubStr(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 // ---- reconnect + stuck-turn recovery --------------------------------------

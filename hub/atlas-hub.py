@@ -7,6 +7,8 @@ serves one JSON tree mirroring the Discord shape:
 
     GET /health          -> liveness (no auth)
     GET /tree            -> the assembled tree (Bearer $API_SERVER_KEY)
+    GET /channels        -> native shape store (?profile=, Bearer)
+    POST /channels/{create|update|delete|assign} -> mutate it (Bearer)
 
 Config via env (defaults match head):
     ATLAS_HUB_ENV      .env holding DISCORD_BOT_TOKEN / API_SERVER_KEY
@@ -23,8 +25,10 @@ import json
 import os
 import sqlite3
 import sys
+import threading
 import time
 import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DISCORD_API = "https://discord.com/api/v10"
@@ -58,6 +62,9 @@ ENV = read_env_file(env_path())
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN") or ENV.get("DISCORD_BOT_TOKEN", "")
 AUTH = os.environ.get("API_SERVER_KEY") or ENV.get("API_SERVER_KEY", "")
 PORT = int(os.environ.get("ATLAS_HUB_PORT", "8643"))
+# Native shape store (categories/channels/assignments) — the one thing the
+# hub OWNS rather than derives. systemd gives the service this StateDirectory.
+STORE_PATH = os.environ.get("ATLAS_HUB_STORE") or "/var/lib/atlas-hub/channels.json"
 CACHE_TTL = float(os.environ.get("ATLAS_HUB_CACHE", "300"))
 
 # Friendlier channel names for non-discord session sources in the tree.
@@ -103,6 +110,152 @@ def discover_profiles():
 
 
 PROFILES = discover_profiles()
+
+# ---- native shape store -----------------------------------------------------
+
+_STORE_LOCK = threading.Lock()
+
+
+def _load_store():
+    try:
+        with open(STORE_PATH) as f:
+            doc = json.load(f)
+        if isinstance(doc, dict):
+            doc.setdefault("version", 1)
+            doc.setdefault("profiles", {})
+            return doc
+    except (OSError, ValueError):
+        pass
+    return {"version": 1, "profiles": {}}
+
+
+def _save_store(doc):
+    d = os.path.dirname(STORE_PATH)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    tmp = STORE_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(doc, f, indent=1, sort_keys=True)
+    os.replace(tmp, STORE_PATH)
+
+
+def _pstore(doc, profile):
+    return doc.setdefault("profiles", {}).setdefault(
+        profile or "default", {"categories": [], "channels": [], "assign": {}})
+
+
+def _store_payload(profile):
+    with _STORE_LOCK:
+        ps = _pstore(_load_store(), profile)
+    return {"profile": profile or "default", "categories": ps["categories"],
+            "channels": ps["channels"], "assign": ps["assign"]}
+
+
+def _clean_name(v):
+    s = str(v or "").strip()
+    if not s:
+        raise ValueError("name is required")
+    return s[:80]
+
+
+def _clean_template(v):
+    return str(v or "")[:8000]
+
+
+def _find(lst, nid):
+    return next((x for x in lst if x.get("id") == nid), None)
+
+
+def channels_mutate(action, body):
+    """One mutation against the store, under the lock, atomically saved.
+    Raises ValueError for bad input (handler maps it to HTTP 400)."""
+    profile = str(body.get("profile") or "default")
+    with _STORE_LOCK:
+        doc = _load_store()
+        ps = _pstore(doc, profile)
+        cats, chans, assign = ps["categories"], ps["channels"], ps["assign"]
+        if action == "create":
+            kind = body.get("kind")
+            if kind == "category":
+                item = {"id": "cat-" + uuid.uuid4().hex[:6], "name": _clean_name(body.get("name")),
+                        "order": len(cats)}
+                cats.append(item)
+            elif kind == "channel":
+                cid = body.get("category_id") or None
+                if cid and not _find(cats, cid):
+                    raise ValueError("category_id not found")
+                item = {"id": "chan-" + uuid.uuid4().hex[:6], "category_id": cid,
+                        "name": _clean_name(body.get("name")),
+                        "template": _clean_template(body.get("template")), "order": len(chans)}
+                chans.append(item)
+            else:
+                raise ValueError("kind must be category|channel")
+            _save_store(doc)
+            return {"ok": True, "item": item}
+        if action == "update":
+            kind, nid = body.get("kind"), str(body.get("id") or "")
+            lst = cats if kind == "category" else chans if kind == "channel" else None
+            if lst is None:
+                raise ValueError("kind must be category|channel")
+            item = _find(lst, nid)
+            if not item:
+                raise ValueError("not found")
+            if "name" in body:
+                item["name"] = _clean_name(body.get("name"))
+            if kind == "channel":
+                if "template" in body:
+                    item["template"] = _clean_template(body.get("template"))
+                if "category_id" in body:
+                    cid = body.get("category_id") or None
+                    if cid and not _find(cats, cid):
+                        raise ValueError("category_id not found")
+                    item["category_id"] = cid
+            if "order" in body:
+                try:
+                    item["order"] = int(body.get("order"))
+                except (TypeError, ValueError):
+                    raise ValueError("order must be an integer")
+            _save_store(doc)
+            return {"ok": True, "item": item}
+        if action == "delete":
+            kind, nid = body.get("kind"), str(body.get("id") or "")
+            if kind == "category":
+                item = _find(cats, nid)
+                if not item:
+                    raise ValueError("not found")
+                cats.remove(item)
+                orphans = 0
+                for ch in chans:
+                    if ch.get("category_id") == nid:
+                        ch["category_id"] = None
+                        orphans += 1
+                _save_store(doc)
+                return {"ok": True, "deleted": nid, "orphaned": orphans}
+            if kind == "channel":
+                item = _find(chans, nid)
+                if not item:
+                    raise ValueError("not found")
+                chans.remove(item)
+                ps["assign"] = {k: v for k, v in assign.items() if v != nid}
+                _save_store(doc)
+                return {"ok": True, "deleted": nid,
+                        "detached": len(assign) - len(ps["assign"])}
+            raise ValueError("kind must be category|channel")
+        if action == "assign":
+            sid = str(body.get("session") or "").strip()
+            if not sid:
+                raise ValueError("session is required")
+            cid = body.get("channel_id") or None
+            if cid is not None:
+                if not _find(chans, cid):
+                    raise ValueError("channel_id not found")
+                assign[sid] = cid
+            else:
+                assign.pop(sid, None)
+            _save_store(doc)
+            return {"ok": True, "session": sid, "channel_id": cid}
+        raise ValueError("unknown action")
+
 
 _cache = {
     "guilds": {},          # profile -> guilds
@@ -221,15 +374,17 @@ def post_node(row, prof):
         "message_count": row["message_count"] or 0,
         "pinned": bool(row["pinned"]),
         "hidden": bool(row["hidden"]),
+        "source": row["source"],
     }
 
 
 def build_tree(include_hidden=False):
     errors = []
     sections = []
+    chan_store = _load_store()
     for prof in PROFILES:
         try:
-            node = build_profile_section(prof, errors, include_hidden)
+            node = build_profile_section(prof, errors, include_hidden, chan_store)
         except Exception as e:
             errors.append(f"profile {prof['name']}: {e}")
             continue
@@ -238,13 +393,45 @@ def build_tree(include_hidden=False):
     return {"generated_at": time.time(), "sections": sections, "errors": errors}
 
 
-def build_profile_section(prof, errors, include_hidden=False):
-    """One profile's subtree: discord guilds + other sources, or None when empty."""
+def build_profile_section(prof, errors, include_hidden=False, chan_store=None):
+    """One profile's subtree: native channels, discord guilds, other sources."""
     rows = load_sessions(prof, include_hidden)
     discord_rows = [r for r in rows if r["source"] == "discord"]
     other_rows = [r for r in rows if r["source"] != "discord"]
 
     children = []
+
+    # ---- Atlas-native channels: categories -> channels -> assigned posts.
+    # The hub OWNS this shape (channels.json); nothing here touches Discord.
+    # A post's assignment wins over its source grouping; only non-discord
+    # rows can be assigned (Discord rows keep their guild view). Native
+    # categories/channels render even with zero chats, so they are visible
+    # the moment they are created.
+    ps = ((chan_store or {}).get("profiles") or {}).get(prof["name"]) or {}
+    assign = ps.get("assign") or {}
+    chans = ps.get("channels") or []
+    valid = {c["id"] for c in chans if c.get("id")}
+    by_chan = {}
+    for r in other_rows:
+        cid = assign.get(r["id"])
+        if cid and cid in valid:
+            p = post_node(r, prof)
+            p["channel_id"] = cid
+            by_chan.setdefault(cid, []).append(p)
+    if by_chan:
+        other_rows = [r for r in other_rows if assign.get(r["id"]) not in valid]
+    chans_by_cat = {}
+    for ch in sorted(chans, key=lambda c: (c.get("order", 0), c.get("name", ""))):
+        node = {"kind": "channel", "name": ch.get("name") or ch["id"], "id": ch["id"],
+                "native": True, "profile": prof["name"], "template": ch.get("template") or "",
+                "category_id": ch.get("category_id"),
+                "children": sorted(by_chan.get(ch["id"], []), key=lambda p: -p["last_active"])}
+        chans_by_cat.setdefault(ch.get("category_id") or "", []).append(node)
+    for cat in sorted(ps.get("categories") or [], key=lambda c: (c.get("order", 0), c.get("name", ""))):
+        children.append({"kind": "category", "name": cat.get("name") or cat["id"], "id": cat["id"],
+                         "native": True, "profile": prof["name"],
+                         "children": chans_by_cat.pop(cat["id"], [])})
+    children.extend(chans_by_cat.get("", []))  # channels without a category sit at profile level
 
     # ---- Discord side: guild -> category -> channel -> posts
     guilds_out = {}  # guild_id -> {name, cats: {name: {chans: {name: [posts]}}}}
@@ -1053,6 +1240,18 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._json(500, {"error": str(e)})
             return
+        if self.path.split("?")[0] == "/channels":
+            if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
+                self._json(401, {"error": "unauthorized"})
+                return
+            try:
+                from urllib.parse import parse_qs, urlparse
+
+                q = parse_qs(urlparse(self.path).query)
+                self._json(200, _store_payload((q.get("profile") or ["default"])[0]))
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
         if self.path.split("?")[0] == "/tree":
             if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
                 self._json(401, {"error": "unauthorized"})
@@ -1070,6 +1269,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?")[0]
+        if path.startswith("/channels/"):
+            if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
+                self._json(401, {"error": "unauthorized"})
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                self._json(200, channels_mutate(path.rsplit("/", 1)[-1], body))
+            except ValueError as e:
+                self._json(400, {"error": str(e)})
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
         if path in ("/mirror", "/mirror_turn"):
             if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
                 self._json(401, {"error": "unauthorized"})

@@ -70,6 +70,9 @@
         class:sel={i === s.cursor}
         class:unread={r.node.kind === "post" && actions.isUnread(r.node)}
         class:archived={r.node.kind === "post" && !!r.node.hidden}
+        class:spawn-running={r.node.kind === "spawn" && r.node.spawn?.state === "running"}
+        class:spawn-done={r.node.kind === "spawn" && r.node.spawn?.state === "done"}
+        class:spawn-failed={r.node.kind === "spawn" && r.node.spawn?.state === "failed"}
         style={`--depth:${r.depth}`}
         onclick={() => {
           actions.setFocus("tree");
@@ -85,7 +88,53 @@
         <span class="glyph">{glyph(r)}</span>
         <span class="label">{r.node.name}</span>
         <span class="tail" class:busy={r.node.kind === "post" && actions.isBusy(r.node)}>{tail(r)}</span>
+        {#if r.node.native && r.node.kind === "channel"}
+          <button
+            class="act"
+            title="new chat in this channel (c)"
+            onclick={(ev) => {
+              ev.stopPropagation();
+              void actions.newChat(r.node.profile, r.node.id);
+            }}>+</button
+          >
+          <button
+            class="act"
+            title="edit channel — name, category, guidelines"
+            onclick={(ev) => {
+              ev.stopPropagation();
+              actions.openEditChannel(r.node);
+            }}>✎</button
+          >
+        {/if}
+        {#if r.node.native && r.node.kind === "category"}
+          <button
+            class="act"
+            title="new channel in this category"
+            onclick={(ev) => {
+              ev.stopPropagation();
+              actions.openNewChannel(r.node.id ?? "", r.node.profile ?? "default");
+            }}>+</button
+          >
+          <button
+            class="act"
+            title="edit category"
+            onclick={(ev) => {
+              ev.stopPropagation();
+              actions.openEditCategory(r.node);
+            }}>✎</button
+          >
+        {/if}
         {#if r.node.kind === "post" && r.node.session_id}
+          {#if r.node.source !== "discord"}
+            <button
+              class="act"
+              title="move this chat to a channel"
+              onclick={(ev) => {
+                ev.stopPropagation();
+                actions.openMovePicker(r.node);
+              }}>→</button
+            >
+          {/if}
           <button
             class="del"
             title={r.node.hidden ? "restore to the tree" : "hide from atlas (H shows hidden)"}
@@ -125,6 +174,41 @@
   .row .del:hover {
     opacity: 1;
     color: var(--fg-hi);
+  }
+  .row .act {
+    all: unset;
+    flex: none;
+    margin-left: 6px;
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 0.78em;
+    line-height: 1.5;
+    color: inherit;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .row:hover .act {
+    opacity: 0.55;
+  }
+  .row .act:hover {
+    opacity: 1;
+    color: var(--fg-hi);
+  }
+  .row.spawn-running .glyph {
+    color: var(--green);
+  }
+  .row.spawn-done .glyph {
+    color: var(--dim2);
+  }
+  .row.spawn-failed .glyph {
+    color: var(--red);
+  }
+  /* touch devices have no hover: keep the row actions visible */
+  @media (pointer: coarse) {
+    .row .act,
+    .row .del {
+      opacity: 0.5;
+    }
   }
   .row.archived .del {
     opacity: 0.8;

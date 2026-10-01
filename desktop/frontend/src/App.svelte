@@ -11,6 +11,8 @@
   import Help from "./lib/components/Help.svelte";
   import LogView from "./lib/components/LogView.svelte";
   import Lightbox from "./lib/components/Lightbox.svelte";
+  import NodeForm from "./lib/components/NodeForm.svelte";
+  import MovePicker from "./lib/components/MovePicker.svelte";
 
   onMount(() => {
     const uninstall = installKeymap();
@@ -52,4 +54,10 @@
     role="presentation"
   ></div>
   <Lightbox />
+  {#if s.modal && (s.modal.kind === "channel" || s.modal.kind === "category")}
+    <NodeForm />
+  {/if}
+  {#if s.modal?.kind === "move"}
+    <MovePicker />
+  {/if}
 </div>

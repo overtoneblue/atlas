@@ -125,10 +125,17 @@ func (s *Serve) SetHidden(ctx context.Context, id, profile string, hidden bool) 
 
 // CreateSession mints a fresh live chat (source "atlas" files it under the
 // profile's Atlas channel in the tree) and returns its stored and runtime ids.
-func (s *Serve) CreateSession(ctx context.Context, profile string) (stored, runtime string, err error) {
+// A non-empty seed rides session.create's messages: display_kind "hidden"
+// rows are model-facing scaffolding the UI never paints (guided-chat runbook)
+// — that is how a channel's guidelines reach the agent without cluttering
+// the transcript.
+func (s *Serve) CreateSession(ctx context.Context, profile string, seed []map[string]any) (stored, runtime string, err error) {
 	params := map[string]any{"source": "atlas"}
 	if profile != "" && profile != "default" {
 		params["profile"] = profile
+	}
+	if len(seed) > 0 {
+		params["messages"] = seed
 	}
 	var out struct {
 		Runtime string `json:"session_id"`

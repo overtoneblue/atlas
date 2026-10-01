@@ -32,6 +32,14 @@ export type HubNode = {
   message_count?: number;
   pinned?: boolean;
   hidden?: boolean; // archived in Hermes (hidden flag) — Atlas renders it only in hidden view
+  // native (hub-owned) nodes: id + template on categories/channels, source +
+  // channel_id on posts — the native channel management UI keys off these
+  id?: string;
+  native?: boolean;
+  template?: string;
+  source?: string;
+  channel_id?: string;
+  category_id?: string | null;
   children?: HubNode[];
   // set only on synthetic "spawn" rows (client-built, nested under a post)
   spawn?: SpawnItem;
@@ -59,6 +67,8 @@ export type Message = {
   id: number;
   role: string;
   content: string;
+  // "hidden" on channel-guideline seed rows: model-facing only, never painted
+  display_kind?: string;
   tool_name: string;
   tool_calls?: { function?: { name?: string; arguments?: string } }[] | null;
   reasoning: string;
@@ -161,6 +171,38 @@ export type Row = {
 };
 
 export type Focus = "tree" | "chat" | "composer";
+
+// Native shape store (atlas-hub channels.json) — categories, channels with
+// their guidelines, and chat -> channel assignments.
+export type ChannelCategory = { id: string; name: string; order?: number };
+export type ChannelInfo = {
+  id: string;
+  category_id: string | null;
+  name: string;
+  template: string;
+  order?: number;
+};
+export type ChannelStore = {
+  profile: string;
+  categories: ChannelCategory[];
+  channels: ChannelInfo[];
+  assign: Record<string, string>;
+};
+
+// One modal slot: the channel/category form or the move-to-channel picker.
+export type ModalState = {
+  kind: "channel" | "category" | "move";
+  mode: "new" | "edit";
+  profile: string;
+  id?: string;
+  name?: string;
+  template?: string;
+  categoryId?: string;
+  newCategory?: string;
+  session?: string;
+  title?: string;
+  current?: string | null;
+};
 
 // One live-turn update, emitted by the Go side on "atlas:turn".
 export type TurnEvent = {

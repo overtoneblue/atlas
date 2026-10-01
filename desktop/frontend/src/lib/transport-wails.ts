@@ -3,7 +3,7 @@
 
 import { DataService } from "../../bindings/atlas/desktop";
 import { Events } from "@wailsio/runtime";
-import type { HubTree, Message, Session, SpawnList, Status as StatusT, TurnEvent, TurnState } from "./types";
+import type { ChannelStore, HubTree, Message, Session, SpawnList, Status as StatusT, TurnEvent, TurnState } from "./types";
 import type { Catalog, Completion, ExecResult, ModelOptions } from "./types";
 
 export async function Status(): Promise<StatusT> {
@@ -93,8 +93,20 @@ export async function HideSession(_profile: string, _sessionID: string, _hidden:
   throw new Error("hide needs the atlasd shell");
 }
 
-export async function NewChat(_profile: string): Promise<{ profile: string; session: string }> {
+export async function NewChat(
+  _profile: string,
+  _channel = "",
+): Promise<{ profile: string; session: string; warning?: string }> {
   throw new Error("new chat needs the atlasd shell");
+}
+
+// The legacy shell has no native channel store.
+export async function GetChannels(_profile: string): Promise<ChannelStore> {
+  return { profile: _profile, categories: [], channels: [], assign: {} };
+}
+
+export async function ChanOp(_body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  throw new Error("channels need the atlasd shell");
 }
 
 // Daemon restart needs the atlasd shell.

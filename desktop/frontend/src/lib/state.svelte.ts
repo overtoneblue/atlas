@@ -7,12 +7,14 @@
 
 import type {
   Catalog,
+  ChannelStore,
   Completion,
   ExecResult,
   Focus,
   HubNode,
   LiveTurn,
   Message,
+  ModalState,
   ModelOptions,
   ModelRow,
   Row,
@@ -53,10 +55,15 @@ function loadBase(): number {
 }
 
 // Transcript density (0 full · 1 no reasoning · 2 exact tools · 3 quiet),
-// persisted so the chosen view mode survives a restart.
+// persisted so the chosen view mode survives a restart. The default is 1
+// (reasoning hidden) — the cleanest read, especially on the phone; whatever
+// the user cycles to with `r` is what sticks.
 function loadDispMode(): number {
-  const v = Number(localStorage.getItem(LS_DISP));
-  return Number.isInteger(v) && v >= 0 && v <= 3 ? v : 0;
+  const raw = localStorage.getItem(LS_DISP);
+  const v = Number(raw);
+  // note: Number(null) is 0, so the missing-key case needs its own check —
+  // otherwise the 1 (reasoning hidden) default is dead code.
+  return raw !== null && Number.isInteger(v) && v >= 0 && v <= 3 ? v : 1;
 }
 
 export const s = $state({
@@ -113,6 +120,10 @@ export const s = $state({
   spawned: {} as Record<string, SpawnItem[]>,
   // the live-log viewer (one spawned run), null when hidden
   logView: null as { item: SpawnItem } | null,
+  // native shape store cache (per profile) + the one modal slot (channel /
+  // category form or the move-to-channel picker)
+  stores: {} as Record<string, ChannelStore>,
+  modal: null as ModalState | null,
   // transcript paging: tail-first reads load the newest page up front and
   // offset pages back through older history (incl. compaction-archived
   // display rows once the head endpoint supports include_compacted)
@@ -141,6 +152,7 @@ const MSG_PAGE = 400;
 
 function cleanMessages(ms: Message[]): Message[] {
   return ms
+    .filter((m) => m.display_kind !== "hidden") // channel-guideline seeds: model-facing only
     .filter((m) => !!m.tool_name || m.role === "user" || m.role === "assistant")
     .filter((m) => (!!m.tool_name && !!m.content?.trim()) || !!m.content?.trim())
     .sort((a, b) => a.id - b.id);
@@ -489,17 +501,187 @@ export const actions = {
 
   // newChat mints a fresh chat through the daemon (serve session.create;
   // source "atlas" files it under the profile's Atlas channel) and opens an
-  // empty composer on it. The tree row appears with the first message.
-  async newChat(profile?: string) {
+  // empty composer on it. With channelId the chat is created inside that
+  // native channel and inherits its guidelines as a hidden context row the
+  // agent reads but the transcript never paints.
+  async newChat(profile?: string, channelId?: string) {
     const p = (profile ?? "").trim() || s.open?.profile || "default";
-    s.statusText = `creating a chat in ${p}…`;
+    s.statusText = channelId ? "creating a chat in the channel…" : `creating a chat in ${p}…`;
     try {
-      const r = await api.NewChat(p);
+      const r = await api.NewChat(p, channelId ?? "");
       await this.openPost({ kind: "post", name: "(new chat)", session_id: r.session, profile: p });
       this.setFocus("composer");
-      s.statusText = `new chat in ${p} — it joins the tree with your first message`;
+      if (r.warning) s.statusText = r.warning;
+      else if (channelId) s.statusText = "new chat — the channel's guidelines are set for the agent";
+      else s.statusText = `new chat in ${p} — it joins the tree with your first message`;
+      void this.refreshTree(); // the seeded row lands under its channel now
     } catch (e: unknown) {
       s.statusText = "new chat failed: " + errText(e);
+    }
+  },
+
+  // ---- native channels (categories · channels · guidelines) --------------
+
+  async ensureStore(profile: string): Promise<ChannelStore | null> {
+    const p = profile || "default";
+    const hit = s.stores[p];
+    if (hit) return hit;
+    try {
+      const st = await api.GetChannels(p);
+      s.stores = { ...s.stores, [p]: st };
+      return st;
+    } catch (e: unknown) {
+      s.statusText = "channels load failed: " + errText(e);
+      return null;
+    }
+  },
+
+  storeFor(profile: string): ChannelStore | null {
+    return s.stores[profile || "default"] ?? null;
+  },
+
+  closeModal() {
+    s.modal = null;
+  },
+
+  openNewCategory(profile: string) {
+    s.modal = { kind: "category", mode: "new", profile: profile || "default", name: "" };
+  },
+
+  openEditCategory(node: HubNode) {
+    s.modal = {
+      kind: "category",
+      mode: "edit",
+      profile: node.profile ?? "default",
+      id: node.id ?? "",
+      name: node.name,
+    };
+  },
+
+  openNewChannel(categoryId: string, profile: string) {
+    s.modal = {
+      kind: "channel",
+      mode: "new",
+      profile: profile || "default",
+      name: "",
+      template: "",
+      categoryId: categoryId || "",
+    };
+    void this.ensureStore(profile);
+  },
+
+  openEditChannel(node: HubNode) {
+    const p = node.profile ?? "default";
+    s.modal = {
+      kind: "channel",
+      mode: "edit",
+      profile: p,
+      id: node.id ?? "",
+      name: node.name,
+      template: node.template ?? "",
+      categoryId: node.category_id ?? "",
+    };
+    void this.ensureStore(p);
+  },
+
+  // saveModal persists the open form (category or channel create/update).
+  async saveModal() {
+    const m = s.modal;
+    if (!m || m.kind === "move") return;
+    try {
+      if (m.kind === "category") {
+        const name = (m.name ?? "").trim();
+        if (!name) return;
+        if (m.mode === "new") {
+          await api.ChanOp({ action: "create", profile: m.profile, kind: "category", name });
+        } else {
+          await api.ChanOp({ action: "update", profile: m.profile, kind: "category", id: m.id, name });
+        }
+        s.statusText = `category ${name} ${m.mode === "new" ? "created" : "saved"}`;
+      } else {
+        const name = (m.name ?? "").trim();
+        if (!name) return;
+        let catId = (m.categoryId ?? "").trim();
+        if (catId === "__new__") catId = "";
+        const fresh = (m.newCategory ?? "").trim();
+        if (fresh) {
+          const r = await api.ChanOp({ action: "create", profile: m.profile, kind: "category", name: fresh });
+          const item = r.item as { id?: string } | undefined;
+          if (item?.id) catId = item.id;
+        }
+        if (m.mode === "new") {
+          await api.ChanOp({
+            action: "create",
+            profile: m.profile,
+            kind: "channel",
+            name,
+            template: m.template ?? "",
+            category_id: catId || null,
+          });
+        } else {
+          await api.ChanOp({
+            action: "update",
+            profile: m.profile,
+            kind: "channel",
+            id: m.id,
+            name,
+            template: m.template ?? "",
+            category_id: catId || null,
+          });
+        }
+        s.statusText =
+          `channel ${name} ${m.mode === "new" ? "created" : "saved"}` +
+          ((m.template ?? "").trim() ? " — guidelines ride every new chat" : "");
+      }
+      s.modal = null;
+      void this.ensureStore(m.profile);
+      void this.refreshTree();
+    } catch (e: unknown) {
+      s.statusText = "save failed: " + errText(e);
+    }
+  },
+
+  // deleteModal removes the open category/channel record. Chats are never
+  // touched: a channel's chats fall back to their source grouping.
+  async deleteModal() {
+    const m = s.modal;
+    if (!m || m.kind === "move") return;
+    try {
+      await api.ChanOp({ action: "delete", profile: m.profile, kind: m.kind, id: m.id });
+      s.modal = null;
+      s.statusText = `${m.kind} deleted — chats are untouched`;
+      void this.ensureStore(m.profile);
+      void this.refreshTree();
+    } catch (e: unknown) {
+      s.statusText = "delete failed: " + errText(e);
+    }
+  },
+
+  openMovePicker(node: HubNode) {
+    if (!node.session_id) return;
+    const p = node.profile ?? "default";
+    s.modal = {
+      kind: "move",
+      mode: "edit",
+      profile: p,
+      session: node.session_id,
+      title: node.name,
+      current: node.channel_id ?? null,
+    };
+    void this.ensureStore(p);
+  },
+
+  // doMove re-files a chat into a native channel (null detaches it).
+  async doMove(channelId: string | null) {
+    const m = s.modal;
+    if (!m || m.kind !== "move" || !m.session) return;
+    try {
+      await api.ChanOp({ action: "assign", profile: m.profile, session: m.session, channel_id: channelId });
+      s.statusText = channelId ? "moved to channel" : "removed from channel";
+      s.modal = null;
+      void this.refreshTree();
+    } catch (e: unknown) {
+      s.statusText = "move failed: " + errText(e);
     }
   },
 

@@ -7,6 +7,7 @@
 
 import type {
   Catalog,
+  ChannelStore,
   Completion,
   ExecResult,
   HubTree,
@@ -130,9 +131,26 @@ export async function HideSession(profile: string, sessionID: string, hidden: bo
   return post("/api/hide", { profile, session: sessionID, hidden });
 }
 
-// Mint a fresh chat in a profile; the daemon returns its stored id.
-export async function NewChat(profile: string): Promise<{ profile: string; session: string }> {
-  return postJSON<{ profile: string; session: string }>("/api/new", { profile });
+// Mint a fresh chat in a profile; the daemon returns its stored id. With a
+// channel the chat is created inside it and inherits its guidelines.
+export async function NewChat(
+  profile: string,
+  channel = "",
+): Promise<{ profile: string; session: string; warning?: string }> {
+  return postJSON<{ profile: string; session: string; warning?: string }>(
+    "/api/new",
+    channel ? { profile, channel } : { profile },
+  );
+}
+
+// Native shape store: categories / channels / guidelines / assignments.
+export async function GetChannels(profile: string): Promise<ChannelStore> {
+  return get(`/api/channels?profile=${encodeURIComponent(profile)}`);
+}
+
+// One store mutation (create|update|delete|assign).
+export async function ChanOp(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return postJSON<Record<string, unknown>>("/api/chan", body);
 }
 
 // Ask atlasd to exit so its supervisor (systemd) relaunches it — the in-app

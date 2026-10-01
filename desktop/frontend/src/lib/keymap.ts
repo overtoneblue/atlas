@@ -43,6 +43,10 @@ function onKey(e: KeyboardEvent) {
     return;
   }
 
+  // Node form / move picker: the component owns its keys (Escape, Enter,
+  // typing) while a modal is up; the router stays out entirely.
+  if (s.modal) return;
+
   // Find bar: the real <input> owns typing; we own the verbs.
   if (s.findOpen) {
     if (key === "Escape") {
@@ -316,10 +320,13 @@ function onKey(e: KeyboardEvent) {
       actions.scrollChat(-20 * n);
       break;
     case "c":
-      // tree: a new chat right here; the composer takes focus
+      // tree: a new chat right here — on a native channel row, a chat inside
+      // that channel (inherits its guidelines); the composer takes focus
       if (s.focus === "tree") {
         e.preventDefault();
-        void actions.newChat();
+        const r = s.rows[s.cursor];
+        if (r?.node.kind === "channel" && r.node.native) void actions.newChat(r.node.profile, r.node.id);
+        else void actions.newChat();
       }
       break;
     case "H":

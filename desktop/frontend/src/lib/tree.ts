@@ -76,8 +76,10 @@ export function buildRows(
       hid += p.hidden;
       arch += p.archived;
     }
-    if (kidRows.length === 0) {
-      // nothing left to show (empty, or everything stowed/hidden)
+    if (kidRows.length === 0 && !node.native) {
+      // nothing left to show (empty, or everything stowed/hidden).
+      // Native categories/channels stay on screen while empty — that is how
+      // a freshly created channel is visible (and fillable) right away.
       return { rows: [], hidden: hid, archived: arch };
     }
     const self: Row = { node, key, depth };
