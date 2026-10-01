@@ -139,6 +139,9 @@ export const s = $state({
   // /model picker: providers → models, fetched from the serve for the open
   // session; the composer draft filters it while open.
   modelPick: null as null | ModelPickState,
+  // a pending large-context/cost confirm from the switch contract: the next
+  // enter on the SAME pick re-sends with confirm=true, esc backs out.
+  modelConfirm: null as { cmd: string; session: string; message: string } | null,
 });
 
 let chatScroller: HTMLDivElement | null = null;
@@ -1422,6 +1425,7 @@ export const actions = {
     if (!mp || mp.loading) return;
     const n = modelPickRows(s.draft).length;
     if (!n) return;
+    s.modelConfirm = null; // moving targets: the pending confirm was for another row
     s.modelPick = { ...mp, moved: true, idx: ((mp.idx + dir) % n + n) % n };
   },
 
@@ -1442,23 +1446,45 @@ export const actions = {
 
   pickerClose() {
     s.modelPick = null;
+    s.modelConfirm = null;
     s.draft = "";
     s.statusText = "";
   },
 
   // pickModel applies the desktop's exact switch contract: model first,
   // provider pinned with --provider, session-scoped — a pick in one chat
-  // never rewrites the profile default. The result renders through the
-  // normal exec fold (✓ confirmation, or the rejection's suggestions).
-  pickModel(row: ModelRow) {
+  // never rewrites the profile default. It routes through the confirm-capable
+  // config.set contract: when a selection guard fires (mid-session switch on
+  // a large cached context, expensive model, data-policy), the picker stays
+  // open with the warning and the next enter re-sends with confirm=true —
+  // the slash path used to flatten that warning into dead text.
+  async pickModel(row: ModelRow) {
     const open = s.open;
-    s.modelPick = null;
-    s.draft = "";
-    if (!open) return;
+    if (!open) {
+      s.modelPick = null;
+      s.draft = "";
+      return;
+    }
     const cmd = row.slug
       ? `/model ${row.name} --provider ${row.slug} --session`
       : `/model ${row.name} --session`;
-    void this.execCommand(cmd);
+    const value = cmd.replace(/^\/model\s+/, "");
+    const confirmed = s.modelConfirm?.cmd === value && s.modelConfirm?.session === open.id;
+    s.statusText = "switching model…";
+    try {
+      const r = await api.SetModel(open.id, value, confirmed);
+      if (r.confirm_required) {
+        s.modelConfirm = { cmd: value, session: open.id, message: r.confirm_message ?? r.warning ?? "" };
+        s.statusText = "large-context switch — enter again to confirm · esc cancels";
+        return; // picker stays open; second enter applies
+      }
+      s.modelConfirm = null;
+      s.modelPick = null;
+      s.draft = "";
+      s.statusText = `model → ${r.value ?? row.name}`;
+    } catch (e: unknown) {
+      s.statusText = "model switch failed: " + errText(e);
+    }
   },
 };
 

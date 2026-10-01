@@ -623,6 +623,28 @@ func (d *Service) NewChat(profile, channelID string) (string, string, error) {
 	return stored, warn, nil
 }
 
+// SetModel switches a chat's model through the confirm-capable config.set
+// contract. serve keys sessions by RUNTIME id, so the daemon resolves its
+// bound runtime first (the stored id is the fallback).
+func (d *Service) SetModel(sessionID, value string, confirmed bool) (map[string]any, error) {
+	if !d.serve.Configured() {
+		return nil, errors.New("hermes-serve is not configured (no session token)")
+	}
+	if sessionID == "" || strings.TrimSpace(value) == "" {
+		return nil, ErrEmpty
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	d.rtMu.Lock()
+	rt := d.runtimes[sessionID]
+	d.rtMu.Unlock()
+	target := sessionID
+	if rt != "" {
+		target = rt
+	}
+	return d.serve.ConfigSetModel(ctx, target, value, confirmed)
+}
+
 // Channels reads the native shape store for one profile (categories,
 // channels, templates, assignments).
 func (d *Service) Channels(profile string) (map[string]any, error) {

@@ -816,7 +816,7 @@ button {
 
 .phint {
   padding: 6px 10px 4px;
-  color: var(--faint);
+  color: var(--dim2);
   font-size: 12.5px;
 }
 
@@ -1238,6 +1238,22 @@ button {
 .mdbtn:focus-visible {
   outline: 1px solid var(--yellow);
   outline-offset: 1px;
+}
+
+/* ------- large-context model-switch confirm (picker) ------- */
+
+.mconfirm {
+  margin: 4px 10px 2px;
+  padding: 7px 10px;
+  border-left: 2px solid var(--yellow);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface2);
+  color: var(--dim2);
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  max-height: 170px;
+  overflow: auto;
 }
 
 /* ------- primary action polish ------- */

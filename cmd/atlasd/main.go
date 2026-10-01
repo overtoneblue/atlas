@@ -81,6 +81,7 @@ func main() {
 	mux.HandleFunc("POST /api/new", api.newChat)
 	mux.HandleFunc("GET /api/channels", api.channels)
 	mux.HandleFunc("POST /api/chan", api.channelOp)
+	mux.HandleFunc("POST /api/model", api.setModel)
 	mux.HandleFunc("POST /api/attach", api.attach)
 	mux.HandleFunc("GET /api/commands", api.commands)
 	mux.HandleFunc("GET /api/complete", api.complete)
@@ -208,6 +209,28 @@ func (a *api) channelOp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := a.svc.ChannelOp(action, body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, res)
+}
+
+// setModel switches the open chat's model through the confirm-capable
+// config.set route (the picker's large-context guard answers
+// confirm_required; the client re-sends with confirm=true).
+func (a *api) setModel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Session string `json:"session"`
+		Value   string `json:"value"`
+		Confirm bool   `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		strings.TrimSpace(req.Session) == "" || strings.TrimSpace(req.Value) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session and value are required"))
+		return
+	}
+	res, err := a.svc.SetModel(req.Session, req.Value, req.Confirm)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return

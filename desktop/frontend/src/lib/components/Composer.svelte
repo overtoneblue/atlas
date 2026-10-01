@@ -90,7 +90,12 @@
             <span class="pdesc">{m.meta}</span>
           </div>
         {/each}
-        <div class="phint">{modelPickRows(s.draft).length} models · ↑↓ pick · enter switch · esc close</div>
+        {#if s.modelConfirm}
+          <div class="mconfirm">{s.modelConfirm.message}</div>
+          <div class="phint">enter again = switch anyway · esc cancels</div>
+        {:else}
+          <div class="phint">{modelPickRows(s.draft).length} models · ↑↓ pick · enter switch · esc close</div>
+        {/if}
       {/if}
     </div>
   {/if}

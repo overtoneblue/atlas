@@ -153,6 +153,23 @@ export async function ChanOp(body: Record<string, unknown>): Promise<Record<stri
   return postJSON<Record<string, unknown>>("/api/chan", body);
 }
 
+// Model switch via the confirm-capable route. A selection guard (large
+// cached context, cost, data-policy) answers confirm_required + a message;
+// re-send with confirm=true to apply after the user confirms.
+export async function SetModel(
+  session: string,
+  value: string,
+  confirm: boolean,
+): Promise<{
+  value?: string;
+  warning?: string;
+  confirm_required?: boolean;
+  confirm_message?: string;
+  scope?: string;
+}> {
+  return postJSON("/api/model", { session, value, confirm });
+}
+
 // Ask atlasd to exit so its supervisor (systemd) relaunches it — the in-app
 // `systemctl restart atlasd`. The custom header forces a CORS preflight, so a
 // stray web page can't fire it blind. 409 while turns are live unless forced.

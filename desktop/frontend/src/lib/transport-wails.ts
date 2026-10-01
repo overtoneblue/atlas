@@ -109,6 +109,14 @@ export async function ChanOp(_body: Record<string, unknown>): Promise<Record<str
   throw new Error("channels need the atlasd shell");
 }
 
+export async function SetModel(
+  _session: string,
+  _value: string,
+  _confirm: boolean,
+): Promise<{ value?: string; warning?: string; confirm_required?: boolean; confirm_message?: string; scope?: string }> {
+  throw new Error("model switch needs the atlasd shell");
+}
+
 // Daemon restart needs the atlasd shell.
 export async function RestartDaemon(_force: boolean): Promise<void> {
   throw new Error("restart needs the atlasd shell");

@@ -147,6 +147,24 @@ func (s *Serve) CreateSession(ctx context.Context, profile string, seed []map[st
 	return out.Stored, out.Runtime, nil
 }
 
+// ConfigSetModel routes a model switch through serve's confirm-capable
+// config.set contract. The slash /model path flattens the large-context (or
+// cost/policy) guard into plain output with no way to confirm — a dead end
+// in clients. This returns the deferred-confirm envelope untouched:
+// {value, warning, confirm_required, confirm_message, scope}; re-send with
+// confirmed=true once the user confirms.
+func (s *Serve) ConfigSetModel(ctx context.Context, sessionID, value string, confirmed bool) (map[string]any, error) {
+	params := map[string]any{
+		"key": "model", "value": value, "session_id": sessionID,
+		"confirm_expensive_model": confirmed,
+	}
+	var out map[string]any
+	if err := s.call(ctx, "config.set", params, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CloseSession releases a live runtime (required before deleting it).
 func (s *Serve) CloseSession(ctx context.Context, runtimeID string) error {
 	return s.call(ctx, "session.close", map[string]any{"session_id": runtimeID}, nil)

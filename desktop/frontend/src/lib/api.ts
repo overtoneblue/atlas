@@ -68,6 +68,20 @@ export const GetChannels = (profile: string): Promise<ChannelStore> => t.GetChan
 export const ChanOp = (body: Record<string, unknown>): Promise<Record<string, unknown>> =>
   t.ChanOp(body);
 
+// Model switch (confirm-capable: the large-context/cost guards answer
+// confirm_required; re-send with confirm=true to apply after confirming).
+export const SetModel = (
+  session: string,
+  value: string,
+  confirm: boolean,
+): Promise<{
+  value?: string;
+  warning?: string;
+  confirm_required?: boolean;
+  confirm_message?: string;
+  scope?: string;
+}> => t.SetModel(session, value, confirm);
+
 // Restart the atlasd this UI is served by (its supervisor relaunches it).
 export const RestartDaemon = (force: boolean): Promise<void> => t.RestartDaemon(force);
 
