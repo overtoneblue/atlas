@@ -390,6 +390,18 @@ func (d *Service) DeleteSession(profile, sessionID string) error {
 	return d.api.DeleteSession(ctx, profile, sessionID)
 }
 
+// SpawnDelete deletes one spawned run's record through the hub: debbie/pi
+// task files are removed; a delegation's log dir is and it is dismissed
+// (the ledger row in Hermes state.db stays untouched).
+func (d *Service) SpawnDelete(kind, id, profile string) error {
+	if !d.hub.Configured() {
+		return errors.New("hub not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return d.hub.SpawnDelete(ctx, kind, id, profile)
+}
+
 // ---- events ---------------------------------------------------------------
 
 // onServeEvent is called from the socket read loop for every event frame:
@@ -423,6 +435,10 @@ func (d *Service) applyServeEvent(stored string, ev hermes.ServeEvent) {
 		turn.lastEvent = time.Now()
 	}
 	d.mu.Unlock()
+	if ev.Type == "session.info" {
+		d.applySessionInfo(stored, ev)
+		return
+	}
 	if turn == nil {
 		return // not a turn Atlas started (or already finished)
 	}
@@ -444,6 +460,15 @@ func (d *Service) applyServeEvent(stored string, ev hermes.ServeEvent) {
 		}
 		d.noteSegment(turn, TurnSegment{Type: "text", Text: p.Text})
 		d.emit(TurnEvent{Kind: "delta", SessionID: stored, Text: p.Text})
+	case "reasoning.delta":
+		var p struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(ev.Payload, &p) != nil || p.Text == "" {
+			return
+		}
+		d.noteSegment(turn, TurnSegment{Type: "reasoning", Text: p.Text})
+		d.emit(TurnEvent{Kind: "reasoning", SessionID: stored, Text: p.Text})
 	case "tool.start":
 		var p struct {
 			Name string `json:"name"`
@@ -495,6 +520,37 @@ func (d *Service) applyServeEvent(stored string, ev hermes.ServeEvent) {
 			d.emit(TurnEvent{Kind: "error", SessionID: stored, Error: p.Message})
 		}
 	}
+}
+
+// applySessionInfo relays the rolling throughput serve attaches to
+// session.info (avg_tps over the last 10 API calls — same numbers the CLI
+// status bar and the official desktop show). Emitted at turn settle, so it
+// also seeds the NEXT turn's live tag with the previous reading.
+func (d *Service) applySessionInfo(stored string, ev hermes.ServeEvent) {
+	var p struct {
+		TPS     float64 `json:"avg_tps"`
+		Latency float64 `json:"avg_latency_s"`
+		Usage   *struct {
+			TPS     float64 `json:"avg_tps"`
+			Latency float64 `json:"avg_latency_s"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(ev.Payload, &p) != nil {
+		return
+	}
+	tps, lat := p.TPS, p.Latency
+	if p.Usage != nil {
+		if tps == 0 {
+			tps = p.Usage.TPS
+		}
+		if lat == 0 {
+			lat = p.Usage.Latency
+		}
+	}
+	if tps <= 0 {
+		return
+	}
+	d.emit(TurnEvent{Kind: "stats", SessionID: stored, TPS: tps, Latency: lat})
 }
 
 // finishTurn ends a turn exactly once: drops it from the live map, emits an

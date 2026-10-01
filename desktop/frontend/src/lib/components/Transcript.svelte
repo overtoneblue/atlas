@@ -349,7 +349,7 @@
         <div class="msg agent live">
           <div class="head">
             <span class="who" style={`color:${authorColor()}`}>{authorName()}</span>
-            <span class="time live-tag">● live</span>
+            <span class="time live-tag">● live{#if s.live.tps} · {Math.round(s.live.tps)} tok/s{/if}</span>
           </div>
           {#each s.live.segments as seg}
             {#if seg.type === "tool"}
@@ -358,6 +358,10 @@
                   <span class="tname">{toolGlyph(seg.name)} {seg.name}</span>
                   <span class="snip">{seg.state === "done" ? "✓" : "…"}</span>
                 </div>
+              {/if}
+            {:else if seg.type === "reasoning"}
+              {#if s.dispMode === 0}
+                <div class="reason">{@html mdLite(seg.text)}</div>
               {/if}
             {:else}
               <div class="body">{@html mdLite(seg.text)}</div>

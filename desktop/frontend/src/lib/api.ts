@@ -110,6 +110,11 @@ export const GetSpawnLog = (
   lines: number,
 ): Promise<string> => t.FetchSpawnLog(kind, id, task, lines);
 
+// Delete one spawned run's record (debbie/pi task files; a subagent run is
+// dismissed). The hub refuses runs still in flight.
+export const SpawnDelete = (kind: string, id: string, profile: string): Promise<void> =>
+  t.SpawnDelete(kind, id, profile);
+
 // Live-turn attach: snapshot of a mid-flight turn (see types.TurnState).
 export const FetchTurn = (sessionID: string): Promise<TurnState> => t.FetchTurn(sessionID);
 

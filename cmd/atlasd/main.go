@@ -70,6 +70,7 @@ func main() {
 	mux.HandleFunc("GET /api/tree", api.tree)
 	mux.HandleFunc("GET /api/spawned", api.spawned)
 	mux.HandleFunc("GET /api/spawn-log", api.spawnLog)
+	mux.HandleFunc("POST /api/spawned/delete", api.spawnDelete)
 	mux.HandleFunc("GET /api/sessions", api.sessions)
 	mux.HandleFunc("GET /api/messages", api.messages)
 	mux.HandleFunc("GET /api/turn", api.turn)
@@ -285,6 +286,25 @@ func (a *api) spawned(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeRaw(w, list)
+}
+
+// spawnDelete removes one spawned run's record (debbie/pi files; a
+// delegation is dismissed). The hub refuses runs still in flight.
+func (a *api) spawnDelete(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Kind    string `json:"kind"`
+		ID      string `json:"id"`
+		Profile string `json:"profile"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("bad request body"))
+		return
+	}
+	if err := a.svc.SpawnDelete(in.Kind, in.ID, in.Profile); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 func (a *api) spawnLog(w http.ResponseWriter, r *http.Request) {

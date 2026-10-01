@@ -93,6 +93,10 @@ export async function HideSession(_profile: string, _sessionID: string, _hidden:
   throw new Error("hide needs the atlasd shell");
 }
 
+export async function SpawnDelete(_kind: string, _id: string, _profile: string): Promise<void> {
+  throw new Error("spawn delete needs the atlasd shell");
+}
+
 export async function NewChat(
   _profile: string,
   _channel = "",

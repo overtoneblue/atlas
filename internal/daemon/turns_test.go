@@ -75,7 +75,7 @@ func TestServeEventsDriveATurn(t *testing.T) {
 	d.turns["stored1"] = turn
 
 	d.onServeEvent(ev("rt-unknown", "message.delta", 1, `{"text":"ignored"}`)) // someone else's session
-	d.onServeEvent(ev("rt1", "reasoning.delta", 1, `{"text":"hmm"}`))          // reasoning is not a segment
+	d.onServeEvent(ev("rt1", "reasoning.delta", 1, `{"text":"hmm"}`))          // reasoning streams as its own segment
 	d.onServeEvent(ev("rt1", "message.delta", 2, `{"text":"Hel"}`))
 	d.onServeEvent(ev("rt1", "message.delta", 2, `{"text":"DUPLICATE"}`)) // replay overlap: seq already seen
 	d.onServeEvent(ev("rt1", "tool.start", 3, `{"name":"terminal","tool_id":"a"}`))
@@ -86,7 +86,8 @@ func TestServeEventsDriveATurn(t *testing.T) {
 	if snap == nil {
 		t.Fatal("turn should still be live")
 	}
-	if len(snap.Segments) != 3 || snap.Segments[0].Text != "Hel" || snap.Segments[1].State != "done" || snap.Segments[2].Text != "lo" {
+	if len(snap.Segments) != 4 || snap.Segments[0].Type != "reasoning" || snap.Segments[0].Text != "hmm" ||
+		snap.Segments[1].Text != "Hel" || snap.Segments[2].State != "done" || snap.Segments[3].Text != "lo" {
 		t.Fatalf("segments = %+v", snap.Segments)
 	}
 
@@ -101,7 +102,7 @@ func TestServeEventsDriveATurn(t *testing.T) {
 	for _, e := range drain(ch) {
 		kinds = append(kinds, e.Kind+":"+e.Text+e.Tool+e.ToolState)
 	}
-	want := []string{"delta:Hel", "tool:terminalrunning", "tool:terminaldone", "delta:lo", "done:"}
+	want := []string{"reasoning:hmm", "delta:Hel", "tool:terminalrunning", "tool:terminaldone", "delta:lo", "done:"}
 	if len(kinds) != len(want) {
 		t.Fatalf("events = %v, want %v", kinds, want)
 	}
@@ -145,6 +146,22 @@ func TestInterruptedAndErroredTurns(t *testing.T) {
 				t.Fatalf("done=%+v err=%q", done, gotErr)
 			}
 		})
+	}
+}
+
+func TestSessionInfoEmitsStats(t *testing.T) {
+	d := newTestService()
+	ch, cancel := d.Subscribe()
+	defer cancel()
+	d.rtMu.Lock()
+	d.bindRuntimeLocked("s", "r")
+	d.rtMu.Unlock()
+	// session.info lands at settle, when the turn is already gone — it must
+	// still relay (this is what feeds the tok/s readout).
+	d.onServeEvent(ev("r", "session.info", 1, `{"usage":{"avg_tps":41.7,"avg_latency_s":2.3}}`))
+	got := drain(ch)
+	if len(got) != 1 || got[0].Kind != "stats" || got[0].TPS != 41.7 || got[0].Latency != 2.3 {
+		t.Fatalf("stats event = %+v", got)
 	}
 }
 

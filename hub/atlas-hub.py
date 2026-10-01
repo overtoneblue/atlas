@@ -23,6 +23,7 @@ Stdlib only — run with any python3.
 
 import json
 import os
+import shutil
 import sqlite3
 import sys
 import threading
@@ -137,6 +138,22 @@ def _save_store(doc):
     with open(tmp, "w") as f:
         json.dump(doc, f, indent=1, sort_keys=True)
     os.replace(tmp, STORE_PATH)
+
+
+def _dismissed_get():
+    """Delegation ids hidden from the spawned list (their ledger rows live in
+    Hermes state.db, which stays read-only; this is the hub's own memory)."""
+    doc = _load_store()
+    return set(x for x in (doc.get("dismissed") or []) if isinstance(x, str))
+
+
+def _dismissed_add(did):
+    with _STORE_LOCK:
+        doc = _load_store()
+        lst = [x for x in (doc.get("dismissed") or []) if x != did]
+        lst.append(did)
+        doc["dismissed"] = lst[-400:]
+        _save_store(doc)
 
 
 def _pstore(doc, profile):
@@ -622,6 +639,7 @@ def spawn_items():
     resolved to a session id when it can be."""
     items, errors = [], []
 
+    dismissed = _dismissed_get()
     for prof in PROFILES:
         seen = set()
         # -- ledger rows (live state + parent) --------------------------
@@ -646,6 +664,8 @@ def spawn_items():
 
         for r in rows:
             did = r["delegation_id"]
+            if did in dismissed:
+                continue
             seen.add(did)
             parent = r["parent_session_id"] or ""
             pchat = ""
@@ -671,7 +691,7 @@ def spawn_items():
 
         # -- live dirs the ledger no longer remembers -------------------
         for did, m in dirs.items():
-            if did in seen:
+            if did in seen or did in dismissed:
                 continue
             tasks = _tasks_from_manifest(m)
             items.append({
@@ -785,6 +805,68 @@ def spawn_log(kind, sid, task, lines):
         f.seek(max(0, size - 262144))
         data = f.read().decode("utf-8", "replace")
     return "\n".join(data.splitlines()[-lines:])
+
+
+def _unlink_set(d, tid):
+    n = 0
+    for name in os.listdir(d):
+        if name.startswith(tid + "."):
+            fp = os.path.join(d, name)
+            if os.path.isfile(fp):
+                os.unlink(fp)
+                n += 1
+    return n
+
+
+def spawn_delete(kind, id, profile):
+    """Delete one spawned run's record. debbie/pi: their task files, refused
+    while still running. subagent: the hub's own live-dir + a dismissal —
+    Hermes' ledger row is never touched, it just stops being surfaced."""
+    if not (id and len(id) <= 80 and all(c.isalnum() or c in "-_" for c in id)):
+        raise ValueError("bad id")
+    if kind == "debbie":
+        prof = next((p for p in PROFILES if p["name"] == (profile or "default")), None)
+        if not prof or not id.startswith("debb-"):
+            raise ValueError("unknown debbie task")
+        ddir = os.path.join(prof["home"], "cache", "debbie-tasks")
+        present = [n for n in os.listdir(ddir) if n.startswith(id + ".")] if os.path.isdir(ddir) else []
+        if not present:
+            raise ValueError("not found")
+        if id + ".status" not in present:
+            raise ValueError("still running — wait for it to finish")
+        return {"ok": True, "kind": kind, "id": id, "removed": _unlink_set(ddir, id)}
+    if kind == "pi":
+        if not id.startswith("pi-"):
+            raise ValueError("unknown pi task")
+        pdir = _pi_tasks_dir()
+        present = [n for n in os.listdir(pdir) if n.startswith(id + ".")] if os.path.isdir(pdir) else []
+        if not present:
+            raise ValueError("not found")
+        if id + ".status" not in present:
+            raise ValueError("still running — wait for it to finish")
+        return {"ok": True, "kind": kind, "id": id, "removed": _unlink_set(pdir, id)}
+    if kind == "subagent":
+        if not id.startswith("deleg_"):
+            raise ValueError("unknown delegation")
+        prof = next((p for p in PROFILES if p["name"] == (profile or "default")), None)
+        if not prof:
+            raise ValueError("unknown profile")
+        try:
+            rows = _load_delegations(prof)
+        except sqlite3.Error:
+            rows = []
+        for r in rows:
+            if r["delegation_id"] == id and SPAWN_STATES.get(r["state"]) == "running":
+                raise ValueError("still running — wait for it to finish")
+        root = os.path.realpath(_live_dir_root(prof))
+        target = os.path.realpath(os.path.join(root, id))
+        removed = 0
+        if target.startswith(root + os.sep) and os.path.isdir(target):
+            shutil.rmtree(target)
+            removed = 1
+        _dismissed_add(id)
+        return {"ok": True, "kind": kind, "id": id, "removed": removed, "dismissed": True}
+    raise ValueError("unknown kind")
 
 
 # ---- mirror: relay atlas-originated messages into discord threads ----
@@ -1301,6 +1383,24 @@ class Handler(BaseHTTPRequestHandler):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
                 self._json(200, channels_mutate(path.rsplit("/", 1)[-1], body))
+            except ValueError as e:
+                self._json(400, {"error": str(e)})
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
+        if path == "/spawned/delete":
+            if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
+                self._json(401, {"error": "unauthorized"})
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n) or b"{}")
+                res = spawn_delete(
+                    str(body.get("kind") or ""),
+                    str(body.get("id") or ""),
+                    str(body.get("profile") or ""),
+                )
+                self._json(200, res)
             except ValueError as e:
                 self._json(400, {"error": str(e)})
             except Exception as e:

@@ -217,10 +217,13 @@ export type TurnEvent = {
   ok?: boolean;
   stopped?: boolean;
   error?: string;
+  tps?: number;
+  latency_s?: number;
 };
 
 export type LiveSegment =
   | { type: "text"; text: string }
+  | { type: "reasoning"; text: string }
   | { type: "tool"; name: string; state: string };
 
 export type LiveTurn = {
@@ -228,5 +231,6 @@ export type LiveTurn = {
   profile: string;
   segments: LiveSegment[];
   error: string;
+  tps?: number; // rolling output tokens/sec from serve session.info
 };
 

@@ -242,6 +242,10 @@ function onKey(e: KeyboardEvent) {
       e.preventDefault();
       actions.move(-n);
       break;
+    case "x":
+      e.preventDefault();
+      actions.markToggle(s.cursor);
+      break;
     case "g":
       e.preventDefault();
       actions.toTop();

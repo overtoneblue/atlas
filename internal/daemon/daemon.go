@@ -80,7 +80,7 @@ type activeTurn struct {
 
 // TurnSegment is one live-transcript block (assistant text or a tool row).
 type TurnSegment struct {
-	Type  string `json:"type"` // "text" | "tool"
+	Type  string `json:"type"` // "text" | "tool" | "reasoning"
 	Text  string `json:"text,omitempty"`
 	Name  string `json:"name,omitempty"`
 	State string `json:"state,omitempty"` // tool: running | done
@@ -122,16 +122,18 @@ func (d *Service) InitialSession() string { return d.initialSession }
 
 // TurnEvent is one live-turn update, delivered on the event stream.
 type TurnEvent struct {
-	Kind      string `json:"kind"` // started | delta | tool | done | error
-	SessionID string `json:"session_id"`
-	Profile   string `json:"profile,omitempty"`
-	Text      string `json:"text,omitempty"`       // assistant text delta
-	Tool      string `json:"tool,omitempty"`       // tool name
-	ToolState string `json:"tool_state,omitempty"` // running | done
-	RunID     string `json:"run_id,omitempty"`
-	OK        bool   `json:"ok,omitempty"`
-	Stopped   bool   `json:"stopped,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Kind      string  `json:"kind"` // started | delta | tool | done | error
+	SessionID string  `json:"session_id"`
+	Profile   string  `json:"profile,omitempty"`
+	Text      string  `json:"text,omitempty"`       // assistant text delta
+	Tool      string  `json:"tool,omitempty"`       // tool name
+	ToolState string  `json:"tool_state,omitempty"` // running | done
+	RunID     string  `json:"run_id,omitempty"`
+	OK        bool    `json:"ok,omitempty"`
+	Stopped   bool    `json:"stopped,omitempty"`
+	Error     string  `json:"error,omitempty"`
+	TPS       float64 `json:"tps,omitempty"`       // rolling output tokens/sec (serve session.info)
+	Latency   float64 `json:"latency_s,omitempty"` // rolling avg API latency (serve session.info)
 }
 
 // Subscribe registers a live-turn event stream. Cancel (unsubscribe) when
@@ -384,7 +386,7 @@ func (d *Service) noteSegment(turn *activeTurn, seg TurnSegment) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	const maxSegs, maxText = 500, 1 << 18
-	if seg.Type == "text" && len(turn.segments) > 0 && turn.segments[len(turn.segments)-1].Type == "text" {
+	if (seg.Type == "text" || seg.Type == "reasoning") && len(turn.segments) > 0 && turn.segments[len(turn.segments)-1].Type == seg.Type {
 		if len(turn.segments[len(turn.segments)-1].Text) < maxText {
 			turn.segments[len(turn.segments)-1].Text += seg.Text
 		}

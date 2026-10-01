@@ -72,6 +72,9 @@ export const s = $state({
   sessions: [] as Session[],
   rows: [] as Row[],
   cursor: 0,
+  sel: [] as string[], // marked row keys (multi-select)
+  selAnchor: null as number | null, // shift+click anchor row index
+  stats: {} as Record<string, { tps?: number }>, // last session.info reading per session
   collapsed: [] as string[], // fold keys (stable name paths)
   hideStale: localStorage.getItem(LS_STALE) !== "0",
   hiddenView: localStorage.getItem(LS_HIDDEN_VIEW) === "1",
@@ -499,6 +502,77 @@ export const actions = {
     } catch (e: unknown) {
       apply(!hidden); // roll the optimistic flip back
       s.statusText = "hide failed: " + errText(e);
+    }
+  },
+
+  // -- multi-select: ctrl+click toggles one row, shift+click selects the
+  // visible range from the anchor; the bulk action applies per type (chats
+  // hide, spawned run records delete). `x` toggles from the keyboard. --
+  markable(r: (typeof s.rows)[number] | undefined): boolean {
+    return (
+      !!r &&
+      ((r.node.kind === "post" && !!r.node.session_id) ||
+        (r.node.kind === "spawn" && !!r.node.spawn))
+    );
+  },
+  markToggle(i: number) {
+    if (s.focus !== "tree") return;
+    const r = s.rows[i];
+    if (!this.markable(r)) return;
+    s.cursor = i;
+    s.sel = s.sel.includes(r.key) ? s.sel.filter((k) => k !== r.key) : s.sel.concat(r.key);
+    s.selAnchor = i;
+  },
+  markRange(i: number) {
+    const a = s.selAnchor ?? s.cursor;
+    const lo = Math.min(a, i);
+    const hi = Math.max(a, i);
+    const keys = new Set(s.sel);
+    for (let j = lo; j <= hi; j++) {
+      const r = s.rows[j];
+      if (this.markable(r)) keys.add(r.key);
+    }
+    s.sel = [...keys];
+  },
+  clearSel() {
+    if (s.sel.length || s.selAnchor !== null) {
+      s.sel = [];
+      s.selAnchor = null;
+    }
+  },
+  async bulkApply() {
+    const targets = s.rows.filter((r) => s.sel.includes(r.key));
+    let hid = 0;
+    let del = 0;
+    const failed: string[] = [];
+    for (const r of targets) {
+      try {
+        if (r.node.kind === "spawn" && r.node.spawn) {
+          await api.SpawnDelete(r.node.spawn.kind, r.node.spawn.id, r.node.spawn.profile ?? "default");
+          del++;
+        } else if (r.node.kind === "post" && r.node.session_id && !r.node.hidden) {
+          await api.HideSession(r.node.profile ?? "default", r.node.session_id, true);
+          hid++;
+        }
+      } catch {
+        failed.push(r.node.name);
+      }
+    }
+    this.clearSel();
+    await this.refreshTree();
+    void this.refreshSpawned();
+    s.statusText =
+      `bulk: hid ${hid} chat${hid === 1 ? "" : "s"} · deleted ${del} run record${del === 1 ? "" : "s"}` +
+      (failed.length ? ` · ${failed.length} failed: ${failed.join(", ")}` : "");
+  },
+  async deleteSpawn(spawn: { kind: string; id: string; profile?: string }) {
+    try {
+      await api.SpawnDelete(spawn.kind, spawn.id, spawn.profile ?? "default");
+      s.statusText = `deleted ${spawn.kind} run ${spawn.id}`;
+      await this.refreshTree();
+      void this.refreshSpawned();
+    } catch (e: unknown) {
+      s.statusText = `${spawn.kind} delete failed: ` + errText(e);
     }
   },
 
@@ -1166,7 +1240,7 @@ export const actions = {
     switch (ev.kind) {
       case "started":
         if (openHere) {
-          s.live = { session: sid, profile: ev.profile ?? "default", segments: [], error: "" };
+          s.live = { session: sid, profile: ev.profile ?? "default", segments: [], error: "", tps: s.stats[sid]?.tps };
           s.autoScroll += 1; // the live block lands below the echo — follow it down
         }
         break;
@@ -1201,6 +1275,22 @@ export const actions = {
           }
           s.autoScroll += 1;
         }
+        break;
+      case "reasoning":
+        if (openHere) {
+          if (!s.live || s.live.session !== sid) {
+            s.live = { session: sid, profile: ev.profile ?? "default", segments: [], error: "" };
+          }
+          const rsegs = s.live.segments;
+          const rlast = rsegs[rsegs.length - 1];
+          if (rlast && rlast.type === "reasoning") rlast.text += ev.text ?? "";
+          else rsegs.push({ type: "reasoning", text: ev.text ?? "" });
+          s.autoScroll += 1;
+        }
+        break;
+      case "stats":
+        if (ev.tps) s.stats = { ...s.stats, [sid]: { tps: ev.tps } };
+        if (openHere && s.live && s.live.session === sid && ev.tps) s.live.tps = ev.tps;
         break;
       case "error":
         if (openHere && s.live && s.live.session === sid) {
@@ -1268,6 +1358,10 @@ export const actions = {
   },
 
   escape() {
+    if (s.sel.length || s.selAnchor !== null) {
+      this.clearSel();
+      return;
+    }
     if (s.helpOpen) {
       s.helpOpen = false;
       return;

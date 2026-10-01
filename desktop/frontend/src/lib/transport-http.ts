@@ -228,6 +228,11 @@ export async function FetchSpawnLog(
   return r.text ?? "";
 }
 
+// Delete one spawned run's record (the hub refuses runs still in flight).
+export async function SpawnDelete(kind: string, id: string, profile: string): Promise<void> {
+  return post("/api/spawned/delete", { kind, id, profile });
+}
+
 export function subscribeTurn(onEvent: (ev: TurnEvent) => void): () => void {
   const es = new EventSource(`${BASE}/api/events`);
   const handler = (e: MessageEvent) => {

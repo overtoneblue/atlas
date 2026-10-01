@@ -107,6 +107,38 @@ func (h *Hub) FetchSpawnedRaw(ctx context.Context) (json.RawMessage, error) {
 	return h.fetchRaw(ctx, "/spawned")
 }
 
+// SpawnDelete asks the hub to remove one spawned run's record: debbie/pi
+// task files are deleted, a delegation is dismissed; both refused by the hub
+// while the run is still going.
+func (h *Hub) SpawnDelete(ctx context.Context, kind, id, profile string) error {
+	body, _ := json.Marshal(map[string]string{"kind": kind, "id": id, "profile": profile})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.BaseURL+"/spawned/delete", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if h.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+h.Key)
+	}
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(raw, &e)
+		if e.Error != "" {
+			return errors.New(e.Error)
+		}
+		return fmt.Errorf("spawn delete: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (h *Hub) FetchTree(ctx context.Context) (*HubTree, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.BaseURL+"/tree?include_hidden=1", nil)
 	if err != nil {

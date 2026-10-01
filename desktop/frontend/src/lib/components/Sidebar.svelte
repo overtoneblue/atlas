@@ -54,6 +54,10 @@
     return "";
   }
 
+  // two-click confirm arms: spawn ✕ and the bulk strip
+  let armed = $state("");
+  let bulkArmed = $state(false);
+
   let el = $state<HTMLElement | null>(null);
   $effect(() => {
     // keep the cursor row in view
@@ -82,14 +86,26 @@
       <div
         class="row {r.node.kind}"
         class:sel={i === s.cursor}
+        class:marked={s.sel.includes(r.key)}
         class:unread={r.node.kind === "post" && actions.isUnread(r.node)}
         class:archived={r.node.kind === "post" && !!r.node.hidden}
         class:spawn-running={r.node.kind === "spawn" && r.node.spawn?.state === "running"}
         class:spawn-done={r.node.kind === "spawn" && r.node.spawn?.state === "done"}
         class:spawn-failed={r.node.kind === "spawn" && r.node.spawn?.state === "failed"}
         style={`--depth:${r.depth}`}
-        onclick={() => {
+        onclick={(ev: MouseEvent) => {
+          if (ev.ctrlKey || ev.metaKey) {
+            actions.setFocus("tree");
+            actions.markToggle(i);
+            return;
+          }
+          if (ev.shiftKey) {
+            actions.setFocus("tree");
+            actions.markRange(i);
+            return;
+          }
           actions.setFocus("tree");
+          actions.clearSel();
           actions.clickRow(i);
           if (
             (r.node.kind === "post" && r.node.session_id) ||
@@ -168,14 +184,50 @@
             }}
           >{r.node.hidden ? "↺" : "⊘"}</button>
         {/if}
+        {#if r.node.kind === "spawn" && r.node.spawn && r.node.spawn.state !== "running"}
+          {@const sp = r.node.spawn}
+          <button
+            class="del"
+            title="delete this run's record (its log files go with it)"
+            onclick={(ev) => {
+              ev.stopPropagation();
+              if (armed === r.key) {
+                armed = "";
+                void actions.deleteSpawn(sp);
+              } else {
+                armed = r.key;
+                setTimeout(() => {
+                  if (armed === r.key) armed = "";
+                }, 2500);
+              }
+            }}>{armed === r.key ? "sure?" : "✕"}</button>
+        {/if}
       </div>
     {/each}
   </div>
   <div class="side-foot">
-    {Math.max(0, s.postCount - s.hiddenCount - s.archivedCount)}/{s.postCount} posts{#if s.hiddenCount > 0}
-      · {s.hiddenCount} stowed{/if}{#if s.archivedCount > 0}
-      · {s.archivedCount} hidden{/if}{#if actions.unreadCount() > 0}
-      · <em>{actions.unreadCount()} unread</em>{/if}
+    {#if s.sel.length}
+      <span class="bulk-count">{s.sel.length} selected</span>
+      <button
+        class="bulk-act"
+        title="chats hide; spawned run records delete. esc clears."
+        onclick={() => {
+          if (bulkArmed) {
+            bulkArmed = false;
+            void actions.bulkApply();
+          } else {
+            bulkArmed = true;
+            setTimeout(() => (bulkArmed = false), 2500);
+          }
+        }}>{bulkArmed ? "sure?" : "⊘ hide / ✕ delete"}</button
+      >
+      <button class="bulk-act" onclick={() => actions.clearSel()}>clear</button>
+    {:else}
+      {Math.max(0, s.postCount - s.hiddenCount - s.archivedCount)}/{s.postCount} posts{#if s.hiddenCount > 0}
+        · {s.hiddenCount} stowed{/if}{#if s.archivedCount > 0}
+        · {s.archivedCount} hidden{/if}{#if actions.unreadCount() > 0}
+        · <em>{actions.unreadCount()} unread</em>{/if}
+    {/if}
   </div>
 </aside>
 
@@ -247,5 +299,28 @@
   }
   .row.archived .glyph {
     color: var(--faint);
+  }
+
+  .row.marked {
+    background: var(--surface2);
+    box-shadow: inset 2px 0 0 var(--blue);
+  }
+  .row.marked .label {
+    color: var(--fg);
+  }
+  .side-foot .bulk-count {
+    color: var(--fg);
+  }
+  .side-foot .bulk-act {
+    all: unset;
+    cursor: pointer;
+    margin-left: 8px;
+    padding: 0 8px;
+    border-radius: 4px;
+    background: var(--surface2);
+    color: var(--fg);
+  }
+  .side-foot .bulk-act:hover {
+    color: var(--red);
   }
 </style>
