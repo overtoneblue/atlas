@@ -202,6 +202,7 @@ export type ModalState = {
   session?: string;
   title?: string;
   current?: string | null;
+  error?: string; // last save/delete failure, shown inside the form
 };
 
 // One live-turn update, emitted by the Go side on "atlas:turn".

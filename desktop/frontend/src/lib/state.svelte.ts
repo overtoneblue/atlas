@@ -641,6 +641,7 @@ export const actions = {
       void this.refreshTree();
     } catch (e: unknown) {
       s.statusText = "save failed: " + errText(e);
+      if (s.modal) s.modal.error = errText(e); // visible inside the form, not under the scrim
     }
   },
 
@@ -657,6 +658,7 @@ export const actions = {
       void this.refreshTree();
     } catch (e: unknown) {
       s.statusText = "delete failed: " + errText(e);
+      if (s.modal) s.modal.error = errText(e);
     }
   },
 

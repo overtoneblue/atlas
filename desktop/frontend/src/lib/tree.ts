@@ -9,7 +9,8 @@
 //    ignores folds; folds apply afterwards)
 //  · spawned work (subagent runs, pi tasks, debbie dispatches) nests as child
 //    rows directly under its parent chat, state glyph included
-// Keys are stable name paths (parent/child) so folds survive tree refreshes.
+// Keys are stable name paths (parent/child; native nodes use their id, since
+// names may repeat) so folds survive tree refreshes.
 
 import type { HubNode, Row, Session, SpawnItem } from "./types";
 
@@ -71,7 +72,10 @@ export function buildRows(
     let hid = 0;
     let arch = 0;
     for (const k of kids) {
-      const p = project(k, key + "/" + k.name, depth + 1);
+      // Native rows key on their stable id: names are free text and can repeat
+      // (two "Misc" categories), but row keys must stay unique.
+      const seg = k.native && k.id ? k.id : k.name;
+      const p = project(k, key + "/" + seg, depth + 1);
       kidRows = kidRows.concat(p.rows);
       hid += p.hidden;
       arch += p.archived;

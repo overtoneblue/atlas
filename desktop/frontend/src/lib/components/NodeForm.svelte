@@ -86,6 +86,7 @@
         New chats inherit this the moment they are created; edits apply from then on. Existing chats keep theirs.
       </div>
     {/if}
+    {#if m?.error}<div class="nf-error">{m.error}</div>{/if}
     <div class="nf-buttons">
       {#if m?.mode === "edit"}
         <button

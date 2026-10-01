@@ -275,7 +275,7 @@ func (a *api) tree(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, t)
+	writeRaw(w, t)
 }
 
 func (a *api) spawned(w http.ResponseWriter, r *http.Request) {
@@ -284,7 +284,7 @@ func (a *api) spawned(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, list)
+	writeRaw(w, list)
 }
 
 func (a *api) spawnLog(w http.ResponseWriter, r *http.Request) {
@@ -522,6 +522,12 @@ func (a *api) events(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// writeRaw sends already-encoded JSON verbatim (the hub relays).
+func writeRaw(w http.ResponseWriter, b json.RawMessage) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = w.Write(b)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

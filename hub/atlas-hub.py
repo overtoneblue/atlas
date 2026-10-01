@@ -166,6 +166,19 @@ def _find(lst, nid):
     return next((x for x in lst if x.get("id") == nid), None)
 
 
+_ANY = object()
+
+
+def _name_taken(lst, name, exclude=None, cat=_ANY):
+    """Case-insensitive name collision within one scope: categories are unique
+    per profile, channels per category."""
+    low = name.casefold()
+    return any(
+        x.get("id") != exclude and str(x.get("name", "")).casefold() == low
+        and (cat is _ANY or (x.get("category_id") or None) == cat)
+        for x in lst)
+
+
 def channels_mutate(action, body):
     """One mutation against the store, under the lock, atomically saved.
     Raises ValueError for bad input (handler maps it to HTTP 400)."""
@@ -177,15 +190,19 @@ def channels_mutate(action, body):
         if action == "create":
             kind = body.get("kind")
             if kind == "category":
-                item = {"id": "cat-" + uuid.uuid4().hex[:6], "name": _clean_name(body.get("name")),
-                        "order": len(cats)}
+                name = _clean_name(body.get("name"))
+                if _name_taken(cats, name):
+                    raise ValueError(f'a category named "{name}" already exists')
+                item = {"id": "cat-" + uuid.uuid4().hex[:6], "name": name, "order": len(cats)}
                 cats.append(item)
             elif kind == "channel":
                 cid = body.get("category_id") or None
                 if cid and not _find(cats, cid):
                     raise ValueError("category_id not found")
-                item = {"id": "chan-" + uuid.uuid4().hex[:6], "category_id": cid,
-                        "name": _clean_name(body.get("name")),
+                name = _clean_name(body.get("name"))
+                if _name_taken(chans, name, cat=cid):
+                    raise ValueError(f'a channel named "{name}" already exists in this category')
+                item = {"id": "chan-" + uuid.uuid4().hex[:6], "category_id": cid, "name": name,
                         "template": _clean_template(body.get("template")), "order": len(chans)}
                 chans.append(item)
             else:
@@ -200,16 +217,23 @@ def channels_mutate(action, body):
             item = _find(lst, nid)
             if not item:
                 raise ValueError("not found")
-            if "name" in body:
-                item["name"] = _clean_name(body.get("name"))
+            new_name = _clean_name(body.get("name")) if "name" in body else item["name"]
+            new_cat = item.get("category_id") or None
+            if kind == "channel" and "category_id" in body:
+                new_cat = body.get("category_id") or None
+                if new_cat and not _find(cats, new_cat):
+                    raise ValueError("category_id not found")
+            moved = kind == "channel" and new_cat != (item.get("category_id") or None)
+            # Only a CHANGED name/scope can collide: an untouched legacy duplicate stays editable.
+            if (new_name.casefold() != item["name"].casefold() or moved) and _name_taken(
+                    lst, new_name, exclude=nid, cat=new_cat if kind == "channel" else _ANY):
+                where = " in that category" if kind == "channel" else ""
+                raise ValueError(f'a {kind} named "{new_name}" already exists{where}')
+            item["name"] = new_name
             if kind == "channel":
                 if "template" in body:
                     item["template"] = _clean_template(body.get("template"))
-                if "category_id" in body:
-                    cid = body.get("category_id") or None
-                    if cid and not _find(cats, cid):
-                        raise ValueError("category_id not found")
-                    item["category_id"] = cid
+                item["category_id"] = new_cat
             if "order" in body:
                 try:
                     item["order"] = int(body.get("order"))

@@ -283,24 +283,24 @@ func (d *Service) ModelOptions(sessionID string) (json.RawMessage, error) {
 }
 
 // GetTree fetches the full workstream tree from the hub (all profiles).
-func (d *Service) GetTree() (*hermes.HubTree, error) {
+func (d *Service) GetTree() (json.RawMessage, error) {
 	if !d.hub.Configured() {
 		return nil, errors.New("hub not configured")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return d.hub.FetchTree(ctx)
+	return d.hub.FetchTreeRaw(ctx)
 }
 
 // GetSpawned lists recent spawned work (subagent runs + pi tasks), parents
 // resolved to session ids where the hub could resolve them.
-func (d *Service) GetSpawned() (*hermes.SpawnList, error) {
+func (d *Service) GetSpawned() (json.RawMessage, error) {
 	if !d.hub.Configured() {
 		return nil, errors.New("hub not configured")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return d.hub.FetchSpawned(ctx)
+	return d.hub.FetchSpawnedRaw(ctx)
 }
 
 // GetSpawnLog tails one spawned run's live log (delegation task-N.log or a

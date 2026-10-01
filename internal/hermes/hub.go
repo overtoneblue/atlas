@@ -24,6 +24,13 @@ type HubNode struct {
 	LastActive   float64   `json:"last_active,omitempty"`
 	MessageCount int       `json:"message_count,omitempty"`
 	Pinned       bool      `json:"pinned,omitempty"`
+	Hidden       bool      `json:"hidden,omitempty"`
+	Source       string    `json:"source,omitempty"`
+	ID           string    `json:"id,omitempty"`
+	Native       bool      `json:"native,omitempty"`
+	Template     string    `json:"template,omitempty"`
+	ChannelID    string    `json:"channel_id,omitempty"`
+	CategoryID   *string   `json:"category_id,omitempty"`
 	Children     []HubNode `json:"children,omitempty"`
 }
 
@@ -59,6 +66,46 @@ func NewHubFromEnv() *Hub {
 }
 
 func (h *Hub) Configured() bool { return h != nil && h.Key != "" }
+
+// fetchRaw GETs a hub path and returns the body untouched. The daemon relays
+// the tree and the spawned list to the UI through this: a typed round trip
+// silently drops every field the Go struct has not been taught yet (that is
+// how native categories and the hidden flag once vanished between hub and UI).
+func (h *Hub) fetchRaw(ctx context.Context, path string) (json.RawMessage, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.BaseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if h.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+h.Key)
+	}
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: HTTP %d", strings.SplitN(path, "?", 2)[0], resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if !json.Valid(body) {
+		return nil, fmt.Errorf("GET %s: hub returned invalid JSON", strings.SplitN(path, "?", 2)[0])
+	}
+	return body, nil
+}
+
+// FetchTreeRaw is the tree exactly as the hub sent it (hidden rows included).
+func (h *Hub) FetchTreeRaw(ctx context.Context) (json.RawMessage, error) {
+	return h.fetchRaw(ctx, "/tree?include_hidden=1")
+}
+
+// FetchSpawnedRaw is the spawned-work list exactly as the hub sent it.
+func (h *Hub) FetchSpawnedRaw(ctx context.Context) (json.RawMessage, error) {
+	return h.fetchRaw(ctx, "/spawned")
+}
 
 func (h *Hub) FetchTree(ctx context.Context) (*HubTree, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.BaseURL+"/tree?include_hidden=1", nil)

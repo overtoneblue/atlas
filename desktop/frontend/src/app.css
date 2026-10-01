@@ -1359,6 +1359,16 @@ button {
   margin-right: auto;
 }
 
+.nf-error {
+  margin: 2px 0 10px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--red);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: var(--surface2);
+  color: var(--red);
+  font-size: 12.5px;
+}
+
 .nf-btn {
   all: unset;
   cursor: pointer;
