@@ -1497,6 +1497,16 @@ export const COMMANDS: Command[] = [
       if (o) void actions.hidePost(o.id, o.profile, true);
     },
   },
+  {
+    name: "/channel",
+    desc: "new channel — name · category · guidelines",
+    run: () => void actions.openNewChannel("", s.open?.profile ?? "default"),
+  },
+  {
+    name: "/category",
+    desc: "new category (groups channels in the tree)",
+    run: () => void actions.openNewCategory(s.open?.profile ?? "default"),
+  },
 ];
 
 // One palette row: local commands run client-side; hermes entries run via

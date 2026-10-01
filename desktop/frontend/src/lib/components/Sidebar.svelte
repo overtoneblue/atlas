@@ -88,6 +88,16 @@
         <span class="glyph">{glyph(r)}</span>
         <span class="label">{r.node.name}</span>
         <span class="tail" class:busy={r.node.kind === "post" && actions.isBusy(r.node)}>{tail(r)}</span>
+        {#if r.node.kind === "profile" && r.node.profile}
+          <button
+            class="act"
+            title="new category"
+            onclick={(ev) => {
+              ev.stopPropagation();
+              actions.openNewCategory(r.node.profile ?? "default");
+            }}>+</button
+          >
+        {/if}
         {#if r.node.native && r.node.kind === "channel"}
           <button
             class="act"
