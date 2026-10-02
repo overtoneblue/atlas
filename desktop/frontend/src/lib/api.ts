@@ -95,8 +95,10 @@ export const GetSpawned = (): Promise<SpawnList> => t.FetchSpawned();
 
 // Slash-command surface (hermes-serve via the active transport).
 export const GetCommands = (): Promise<Catalog> => t.GetCommands();
-export const CompleteSlash = (text: string, sessionID: string): Promise<Completion[]> =>
-  t.CompleteSlash(text, sessionID);
+export const CompleteSlash = (
+  text: string,
+  sessionID: string,
+): Promise<{ items: Completion[]; replace_from: number }> => t.CompleteSlash(text, sessionID);
 // Run one slash command against the open session (stored or runtime id).
 export const ExecSlash = (sessionID: string, command: string): Promise<ExecResult> =>
   t.ExecSlash(sessionID, command);

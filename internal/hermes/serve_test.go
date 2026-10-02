@@ -43,9 +43,20 @@ func TestServeLive(t *testing.T) {
 		t.Error("catalog missing /model")
 	}
 
-	items, err := s.CompleteSlash(ctx, "/mo", "")
+	items, rf, err := s.CompleteSlash(ctx, "/mo", "")
 	if err != nil {
 		t.Fatalf("complete: %v", err)
+	}
+	if rf != 1 {
+		t.Errorf("command-stage replace_from = %d, want 1", rf)
+	}
+	// argument stage: hermes knows a command's argument words
+	args, arf, err := s.CompleteSlash(ctx, "/reasoning ", "")
+	if err != nil {
+		t.Fatalf("complete args: %v", err)
+	}
+	if arf != len("/reasoning ") || len(args) == 0 {
+		t.Errorf("argument stage: rf=%d items=%d, want rf=%d and some items", arf, len(args), len("/reasoning "))
 	}
 	texts := make([]string, 0, len(items))
 	for _, it := range items {

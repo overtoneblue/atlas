@@ -125,6 +125,7 @@ export const s = $state({
   catalog: null as Catalog | null,
   catComplete: [] as Completion[], // live complete.slash items for catDraft
   catDraft: "", // the draft the completions belong to
+  catReplace: 1, // where the completed token starts in catDraft (serve replace_from)
   catSeq: 0, // debounce / stale-response guard
   // bumped to force the transcript back to the bottom (send, exec output)
   stickBump: 0,
@@ -1300,22 +1301,32 @@ export const actions = {
 
   // ---- hermes slash commands (hermes-serve) ----------------------------
 
-  // fetchCompletions pulls live fuzzy matches for a bare "/token" draft
-  // (debounced; stale responses are dropped via catSeq).
+  // fetchCompletions asks Hermes' own completer about the WHOLE draft — the
+  // command token ("/rea") and every argument stage after it ("/reasoning ",
+  // "/details thinking "). Hermes knows each command's argument words; Atlas
+  // used to ask only about the bare token, so arguments never surfaced.
+  // Debounced; stale responses are dropped via catSeq.
   async fetchCompletions() {
     const draft = s.draft;
-    if (!/^\/[a-z0-9_-]*$/i.test(draft) || !s.open) {
+    const p = slashParse(draft);
+    if (!p || !s.open || (p.stage === "arg" && localCommand(p.cmd))) {
       s.catComplete = [];
       s.catDraft = "";
+      return;
+    }
+    // "/model " is the model picker's territory (it lists every provider)
+    if (p.stage === "arg" && canonCmd(p.cmd) === "/model") {
+      if (!s.modelPick) void this.openModelPicker();
       return;
     }
     const seq = ++s.catSeq;
     await new Promise((r) => setTimeout(r, 90));
     if (seq !== s.catSeq || s.draft !== draft) return;
     try {
-      const items = await api.CompleteSlash(draft, s.open.id);
+      const r = await api.CompleteSlash(draft, s.open.id);
       if (seq !== s.catSeq) return;
-      s.catComplete = items;
+      s.catComplete = r.items;
+      s.catReplace = r.replace_from;
       s.catDraft = draft;
     } catch {
       s.catComplete = [];
@@ -1788,46 +1799,166 @@ export const actions = {
   },
 
   paletteMove(dir: number) {
-    const n = paletteItems(s.draft).length;
+    const items = paletteItems(s.draft);
+    const n = items.length;
     if (!n) return;
+    if (!s.paletteMoved) {
+      // start from what's visibly picked (or just outside the list)
+      const pick = this.palettePick();
+      const at = pick ? items.findIndex((x) => x.name === pick.name) : -1;
+      s.paletteIdx = at >= 0 ? at : dir > 0 ? -1 : 0;
+    }
     s.paletteMoved = true;
-    s.paletteIdx = ((s.paletteIdx + dir) % n + n) % n;
+    s.paletteIdx = (((s.paletteIdx + dir) % n) + n) % n;
   },
 
   paletteDismiss() {
     s.paletteDismissed = s.draft;
   },
 
-  // Enter runs what the draft clearly points at: the selected row once the
-  // user has navigated (arrows/click), else the first command the draft
-  // prefixes (e.g. "/he" -> /help). A draft matching nothing by prefix is
-  // dispatched to hermes as-is (it answers, e.g. the /models -> /model
-  // hint) instead of silently running a fuzzy descendant like
-  // /codex-runtime.
-  runPalette() {
+  // ---- the staged command grammar ---------------------------------------
+  // One model for every command, no per-command special cases:
+  //   stage "cmd": the draft is "/tok"        → rows are commands
+  //   stage "arg": the draft is "/cmd …tok"   → rows are that position's
+  //                argument words, straight from Hermes' completer
+  // Tab   = complete the row and keep going (drill into the next stage).
+  // Enter = run. On a command that takes a choice (argument_mode "options",
+  //         e.g. /reasoning, /fast, /skin) Enter drills into the choices
+  //         first; Enter again with nothing picked runs it bare.
+
+  // pick resolves the row Enter/Tab acts on: the highlighted row once the
+  // user navigated, else the first row the typed token prefixes. A token
+  // matching nothing by prefix resolves to nothing — the draft then runs as
+  // typed (never a fuzzy descendant: "/models" must not become /codex-…).
+  palettePick(): PaletteItem | undefined {
     const items = paletteItems(s.draft);
-    if (!items.length) return;
-    let it = s.paletteMoved
-      ? items[Math.max(0, Math.min(s.paletteIdx, items.length - 1))]
-      : undefined;
-    if (!it) {
-      const d = s.draft.trim().toLowerCase();
-      it = items.find((x) => x.name.toLowerCase().startsWith(d));
-    }
-    if (!it) {
-      const raw = s.draft.trim();
-      this.clearPalette();
-      if (raw.length > 1 && raw.startsWith("/")) void this.execCommand(raw);
-      return;
-    }
-    this.runItem(it);
+    if (!items.length) return undefined;
+    if (s.paletteMoved) return items[Math.max(0, Math.min(s.paletteIdx, items.length - 1))];
+    const p = slashParse(s.draft);
+    const tok = (p?.token ?? "").toLowerCase();
+    if (p?.stage === "arg" && !tok) return undefined; // nothing typed, nothing picked
+    const want = p?.stage === "cmd" ? s.draft.trim().toLowerCase() : tok;
+    if (p?.stage === "cmd" && want === "/") return undefined; // bare "/" browses
+    return items.find((x) => (x.insert ?? x.name).toLowerCase().startsWith(want));
   },
 
-  runPaletteAt(i: number) {
+  // Tab: complete the picked row into the draft and continue to its next
+  // stage (fetching that stage's options).
+  paletteComplete() {
+    const p = slashParse(s.draft);
+    if (!p) return;
+    const it = this.palettePick() ?? (s.paletteMoved ? undefined : paletteItems(s.draft)[0]);
+    if (!it) return;
+    this.drillInto(it, p);
+  },
+
+  drillInto(it: PaletteItem, p: SlashParse) {
+    if (p.stage === "cmd") {
+      if (canonCmd(it.name) === "/model") {
+        this.clearPalette();
+        void this.openModelPicker();
+        return;
+      }
+      // Tab on a command that takes nothing just completes the name
+      s.draft = it.name + (takesArgs(it) ? " " : "");
+    } else {
+      s.draft = spliceArg(s.draft, it.insert ?? it.name) + " ";
+    }
+    s.paletteDismissed = null;
+    this.paletteReset();
+  },
+
+  async runPalette() {
+    const p = slashParse(s.draft);
+    if (!p) return;
+    const it = this.palettePick();
+    if (p.stage === "cmd" && !it) {
+      const raw = s.draft.trim();
+      this.clearPalette();
+      if (raw.length > 1) void this.dispatchSlash(raw);
+      return;
+    }
+    if (p.stage === "arg" && !it) {
+      // nothing picked: run exactly what's typed ("/reasoning" bare shows
+      // the current value; "/compress here 3" runs as written)
+      const raw = s.draft.trim();
+      this.clearPalette();
+      void this.dispatchSlash(raw);
+      return;
+    }
+    await this.actOn(it as PaletteItem, p);
+  },
+
+  async runPaletteAt(i: number) {
     const items = paletteItems(s.draft);
     const it = items[Math.max(0, Math.min(i, items.length - 1))];
-    if (!it) return;
-    this.runItem(it);
+    const p = slashParse(s.draft);
+    if (!it || !p) return;
+    await this.actOn(it, p);
+  },
+
+  // actOn: Enter/click on a row.
+  //  - command row: a choice-command drills into its values; others run.
+  //  - argument row: if Hermes has a further stage for it (e.g.
+  //    "/tools disable" → toolsets, "/details thinking" → modes) drill in;
+  //    otherwise the line is complete — run it.
+  async actOn(it: PaletteItem, p: SlashParse) {
+    if (p.stage === "cmd") {
+      if (canonCmd(it.name) === "/model") {
+        this.clearPalette();
+        void this.openModelPicker();
+        return;
+      }
+      if (wantsChoice(it)) {
+        this.drillInto(it, p);
+        return;
+      }
+      this.clearPalette();
+      void this.dispatchSlash(it.name);
+      return;
+    }
+    const line = spliceArg(s.draft, it.insert ?? it.name);
+    if (!localCommand(p.cmd) && (await this.hasNextStage(line + " "))) {
+      s.draft = line + " ";
+      s.paletteDismissed = null;
+      this.paletteReset();
+      return;
+    }
+    this.clearPalette();
+    void this.dispatchSlash(line.trim());
+  },
+
+  // hasNextStage asks Hermes whether `text` (ending in a space) opens
+  // another argument list. Bounded: on a slow/failed probe, just run.
+  async hasNextStage(text: string): Promise<boolean> {
+    const open = s.open;
+    if (!open) return false;
+    try {
+      const r = await Promise.race([
+        api.CompleteSlash(text, open.id),
+        new Promise<null>((res) => setTimeout(() => res(null), 1200)),
+      ]);
+      if (!r || !r.items.length) return false;
+      // prime the cache so the next stage paints without a second fetch
+      s.catComplete = r.items;
+      s.catReplace = r.replace_from;
+      s.catDraft = text;
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  // dispatchSlash runs a complete command line: atlas-local commands first
+  // (by first token), everything else on hermes.
+  async dispatchSlash(text: string) {
+    const parts = text.trim().split(/\s+/);
+    const local = localCommand(parts[0]);
+    if (local) {
+      local.run(parts.slice(1).join(" "));
+      return;
+    }
+    await this.execCommand(text.trim());
   },
 
   clearPalette() {
@@ -1837,15 +1968,6 @@ export const actions = {
     s.paletteDismissed = null;
     s.catComplete = [];
     s.catDraft = "";
-  },
-
-  runItem(it: PaletteItem) {
-    this.clearPalette();
-    if (it.local) {
-      it.local.run();
-      return;
-    }
-    void this.execCommand(it.text ?? it.name);
   },
 
   // ---- model picker (/model) -------------------------------------------
@@ -1869,7 +1991,8 @@ export const actions = {
     // handed back on close/pick (it used to be wiped)
     pickerParkedDraft = s.draft.startsWith("/model") ? "" : s.draft;
     s.modelPick = { session: open.id, rows: [], idx: 0, moved: false, loading: true, error: "" };
-    s.draft = "/model ";
+    // typed "/model son…" straight into the composer: keep it as the filter
+    s.draft = s.draft.startsWith("/model ") ? s.draft : "/model ";
     this.setFocus("composer");
     s.statusText = "loading models…";
     try {
@@ -1967,6 +2090,9 @@ export interface Command {
   name: string;
   desc: string;
   run: (args?: string) => void;
+  usage?: string; // shown while typing its arguments
+  args?: () => [string, string][]; // first-argument choices (word, desc)
+  choose?: boolean; // Enter on the bare command shows the choices first
 }
 
 export const COMMANDS: Command[] = [
@@ -1984,9 +2110,20 @@ export const COMMANDS: Command[] = [
   {
     name: "/restart",
     desc: "restart the atlas daemon + reload the UI (/restart force: even mid-turn)",
+    usage: "/restart [force]",
+    args: () => [["force", "restart even while a turn is running"]],
     run: (a) => void actions.restartDaemon(/^(force|-f|--force)$/i.test((a ?? "").trim())),
   },
-  { name: "/new", desc: "new chat in this profile · /new <profile> for another", run: (a) => void actions.newChat(a) },
+  {
+    name: "/new",
+    desc: "new chat in this profile · /new <profile> for another",
+    usage: "/new [profile]",
+    args: () =>
+      s.sections
+        .filter((n) => n.kind === "profile" && n.profile)
+        .map((n) => [n.profile as string, n.name] as [string, string]),
+    run: (a) => void actions.newChat(a),
+  },
   {
     name: "/hide",
     desc: "hide the open chat (H shows hidden chats)",
@@ -2122,14 +2259,107 @@ export function failureHint(code: string | undefined, text: string): string {
   return "R retries · M switches model";
 }
 
+// ---- slash grammar ------------------------------------------------------
+// The palette is generic: it never knows what /reasoning means. It parses
+// the draft into a stage and asks Hermes' completer (complete.slash — the
+// same engine the TUI's popup uses) what fits at the cursor. Catalog data
+// (argument_mode, sub, usage text) only fills gaps when serve is silent.
+
+export type SlashParse = {
+  stage: "cmd" | "arg";
+  cmd: string; // "/reasoning" (as typed)
+  token: string; // the word under the cursor ("" right after a space)
+  argIndex: number; // 0 = first argument
+};
+
+export function slashParse(draft: string): SlashParse | null {
+  if (!draft.startsWith("/") || draft.startsWith("//") || draft.includes("\n")) return null;
+  const sp = draft.indexOf(" ");
+  if (sp < 0) {
+    if (!/^\/[a-z0-9_:.-]*$/i.test(draft)) return null;
+    return { stage: "cmd", cmd: draft, token: draft.slice(1), argIndex: -1 };
+  }
+  const cmd = draft.slice(0, sp);
+  const rest = draft.slice(sp + 1);
+  const words = rest.split(" ");
+  return { stage: "arg", cmd, token: words[words.length - 1], argIndex: words.length - 1 };
+}
+
+export function canonCmd(name: string): string {
+  const n = name.toLowerCase();
+  return s.catalog?.canon?.[n] ?? n;
+}
+
+export function localCommand(name: string): Command | undefined {
+  const n = name.toLowerCase();
+  return COMMANDS.find((c) => c.name.toLowerCase() === n);
+}
+
+function catalogDesc(name: string): string {
+  const c = canonCmd(name);
+  return s.catalog?.pairs.find(([n]) => n.toLowerCase() === c)?.[1] ?? "";
+}
+
+// "Manage reasoning effort (usage: /reasoning [level|show] [--global])"
+// -> "/reasoning [level|show] [--global]"
+export function cmdUsage(name: string): string {
+  const local = localCommand(name);
+  if (local) return local.usage ?? "";
+  const m = /\(usage:\s*([^)]*(?:\([^)]*\)[^)]*)*)\)\s*$/.exec(catalogDesc(name));
+  return m ? m[1].trim() : "";
+}
+
+function argMode(name: string): string {
+  return s.catalog?.commands?.[canonCmd(name)]?.argument_mode ?? "";
+}
+
+// Does the command take arguments at all (Tab then adds a space)?
+function takesArgs(it: PaletteItem): boolean {
+  if (it.local) return !!(it.local.args || it.local.usage);
+  if (it.kind === "skill") return true; // skills take free text
+  const mode = argMode(it.name);
+  if (mode) return true;
+  return /\[|</.test(cmdUsage(it.name));
+}
+
+// A command whose job is choosing a value (/reasoning, /fast, /skin…):
+// Enter shows the values instead of running it bare.
+function wantsChoice(it: PaletteItem): boolean {
+  if (it.local) return !!it.local.args && !!it.local.choose;
+  return argMode(it.name) === "options";
+}
+
+// The value the open chat currently has, for the few settings Atlas can
+// observe live — data, not behavior: one row per observable setting.
+function currentArg(cmd: string): string {
+  const si = s.open ? s.info[s.open.id] : undefined;
+  if (!si) return "";
+  switch (canonCmd(cmd)) {
+    case "/reasoning":
+      return si.reasoning ?? "";
+    case "/fast":
+      return si.live ? (si.fast ? "fast" : "normal") : "";
+    default:
+      return "";
+  }
+}
+
+// Replace the word under the cursor with `word`.
+export function spliceArg(draft: string, word: string): string {
+  const from = s.catDraft === draft ? s.catReplace : draft.lastIndexOf(" ") + 1;
+  return draft.slice(0, Math.max(0, Math.min(from, draft.length))) + word;
+}
+
 // One palette row: local commands run client-side; hermes entries run via
 // slash.exec on the daemon side.
 export interface PaletteItem {
-  name: string;
+  name: string; // shown label ("/reasoning", or "high" on an argument row)
   desc: string;
-  kind: "local" | "command" | "skill";
+  kind: "local" | "command" | "skill" | "arg";
   local?: Command;
-  text?: string; // the exact command text for hermes exec
+  insert?: string; // the word that lands in the draft (argument rows)
+  current?: boolean; // the chat's present value
+  more?: boolean; // picking it leads to another stage
 }
 
 // Browse ("/") lists the full catalog; typing narrows. The cap is only a
@@ -2137,48 +2367,72 @@ export interface PaletteItem {
 const PALETTE_CAP = 300;
 
 export function paletteItems(draft: string): PaletteItem[] {
-  const m = /^\/([a-z0-9_-]*)$/i.exec(draft);
-  if (!m) return [];
-  const f = m[1].toLowerCase();
+  const p = slashParse(draft);
+  if (!p) return [];
+  return p.stage === "cmd" ? commandRows(draft, p) : argRows(draft, p);
+}
+
+function commandRows(draft: string, p: SlashParse): PaletteItem[] {
+  const f = p.token.toLowerCase();
   const out: PaletteItem[] = [];
   const seen = new Set<string>();
   for (const c of COMMANDS) {
     if (c.name.slice(1).toLowerCase().startsWith(f)) {
-      out.push({ name: c.name, desc: c.desc, kind: "local", local: c });
+      out.push({ name: c.name, desc: c.desc, kind: "local", local: c, more: !!(c.args || c.usage) });
       seen.add(c.name);
     }
   }
   // Live completion (fuzzy, ranked, skills included) for the current
   // draft; falls back to a prefix filter over the cached catalog.
   const comp = s.catDraft === draft ? s.catComplete : [];
+  const push = (name: string, desc: string, kind: "command" | "skill") => {
+    if (name === "/" || seen.has(name)) return;
+    seen.add(name);
+    const it: PaletteItem = { name, desc, kind };
+    it.more = takesArgs(it);
+    out.push(it);
+  };
   if (comp.length) {
     for (const it of comp) {
       const raw = it.text.trim();
-      const name = raw.startsWith("/") ? raw : "/" + raw;
-      if (name === "/" || seen.has(name)) continue;
-      out.push({
-        name,
-        desc: it.meta || it.display || "",
-        kind: it.kind === "skill" ? "skill" : "command",
-        text: name,
-      });
+      push(raw.startsWith("/") ? raw : "/" + raw, it.meta || it.display || "", it.kind === "skill" ? "skill" : "command");
     }
   } else if (s.catalog) {
     for (const [name, desc] of s.catalog.pairs) {
-      if (!name.toLowerCase().slice(1).startsWith(f) || seen.has(name)) continue;
-      out.push({ name, desc, kind: "command", text: name });
+      if (name.toLowerCase().slice(1).startsWith(f)) push(name, desc, "command");
     }
     for (const sk of Object.keys(s.catalog.skills ?? {})) {
       const name = sk.startsWith("/") ? sk : "/" + sk;
-      if (!name.toLowerCase().slice(1).startsWith(f) || seen.has(name)) continue;
-      out.push({ name, desc: "skill command", kind: "skill", text: name });
+      if (name.toLowerCase().slice(1).startsWith(f)) push(name, "skill command", "skill");
     }
   }
   return out.slice(0, PALETTE_CAP);
 }
 
-// Visible while the composer draft is a bare "/suffix" (no arguments yet)
-// and not dismissed via esc for this exact draft.
+function argRows(draft: string, p: SlashParse): PaletteItem[] {
+  if (canonCmd(p.cmd) === "/model") return []; // the model picker owns it
+  const tok = p.token.toLowerCase();
+  const cur = p.argIndex === 0 ? currentArg(p.cmd).toLowerCase() : "";
+  const local = localCommand(p.cmd);
+  let words: [string, string][] = [];
+  if (local) {
+    if (p.argIndex === 0 && local.args) words = local.args();
+  } else if (s.catDraft === draft) {
+    words = s.catComplete.map((c) => [c.text.trim(), c.meta || ""] as [string, string]);
+  } else if (p.argIndex === 0) {
+    // serve not answered yet (or down): the catalog's first-argument words
+    words = (s.catalog?.sub?.[canonCmd(p.cmd)] ?? []).map((w) => [w, ""] as [string, string]);
+  }
+  const out: PaletteItem[] = [];
+  for (const [w, d] of words) {
+    if (!w || (tok && !w.toLowerCase().startsWith(tok) && !(s.catDraft === draft && !local))) continue;
+    out.push({ name: w, desc: d, kind: "arg", insert: w, current: !!cur && w.toLowerCase() === cur });
+  }
+  return out.slice(0, PALETTE_CAP);
+}
+
+// Visible while the draft is in a slash stage that has rows, and not
+// dismissed via esc for this exact draft.
 export function paletteVisible(): boolean {
   return (
     s.focus === "composer" &&
@@ -2186,6 +2440,26 @@ export function paletteVisible(): boolean {
     s.paletteDismissed !== s.draft &&
     paletteItems(s.draft).length > 0
   );
+}
+
+// The row Enter/Tab would act on, for highlighting (-1 = none: the line
+// then runs as typed).
+export function paletteSelIndex(): number {
+  const items = paletteItems(s.draft);
+  if (!items.length) return -1;
+  if (s.paletteMoved) return Math.max(0, Math.min(s.paletteIdx, items.length - 1));
+  // rows are rebuilt per call: match by identity of content, not object
+  const pick = actions.palettePick();
+  return pick ? items.findIndex((x) => x.name === pick.name && x.kind === pick.kind) : -1;
+}
+
+// The quiet one-line guide above the composer while typing a command's
+// arguments: its usage ("/compress [here [N] | focus topic | --preview]"),
+// so free-text commands still teach their shape without a list.
+export function slashHint(): string {
+  const p = slashParse(s.draft);
+  if (!p || p.stage !== "arg" || s.focus !== "composer" || s.modelPick) return "";
+  return cmdUsage(p.cmd);
 }
 
 // ---- model picker state ----------------------------------------------

@@ -158,6 +158,10 @@ export type Catalog = {
   pairs: [string, string][];
   categories: { name: string; pairs: [string, string][] }[];
   commands: Record<string, CatalogMeta>;
+  // first-argument words per command ("/reasoning" -> ["none", …, "high"])
+  sub?: Record<string, string[]>;
+  // alias -> canonical command ("/bp" -> "/blueprint")
+  canon?: Record<string, string>;
   skills: Record<string, { usage: number; origin: string }>;
   skill_count?: number;
 };

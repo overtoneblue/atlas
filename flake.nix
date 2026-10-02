@@ -20,7 +20,7 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           # ONE version for every output (bundle chip, atlasd ldflags, pkgs)
-          atlasVersion = "0.21.0";
+          atlasVersion = "0.21.1";
 
           # ── Web UI bundle ────────────────────────────────────────────────
           # The transport is a BUILD-TIME contract (vite define

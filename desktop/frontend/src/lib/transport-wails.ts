@@ -65,8 +65,11 @@ export async function GetCommands(): Promise<Catalog> {
   return { pairs: [], categories: [], commands: {}, skills: {} };
 }
 
-export async function CompleteSlash(_text: string, _sessionID: string): Promise<Completion[]> {
-  return [];
+export async function CompleteSlash(
+  _text: string,
+  _sessionID: string,
+): Promise<{ items: Completion[]; replace_from: number }> {
+  return { items: [], replace_from: 1 };
 }
 
 export async function ExecSlash(_sessionID: string, _command: string): Promise<ExecResult> {

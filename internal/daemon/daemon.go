@@ -331,7 +331,7 @@ func (d *Service) GetCatalog(refresh bool) (*hermes.Catalog, error) {
 }
 
 // CompleteSlash proxies ranked slash/skill completions for the composer.
-func (d *Service) CompleteSlash(text, sessionID string) ([]hermes.Completion, error) {
+func (d *Service) CompleteSlash(text, sessionID string) ([]hermes.Completion, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return d.serve.CompleteSlash(ctx, text, sessionID)

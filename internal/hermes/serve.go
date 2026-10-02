@@ -193,18 +193,29 @@ func (s *Serve) Catalog(ctx context.Context) (*Catalog, error) {
 }
 
 // CompleteSlash returns ranked slash/skill completions for a composer text.
-func (s *Serve) CompleteSlash(ctx context.Context, text, sessionID string) ([]Completion, error) {
+func (s *Serve) CompleteSlash(ctx context.Context, text, sessionID string) ([]Completion, int, error) {
 	params := map[string]any{"text": text}
 	if sessionID != "" {
 		params["session_id"] = sessionID
 	}
 	var out struct {
-		Items []Completion `json:"items"`
+		Items       []Completion `json:"items"`
+		ReplaceFrom *int         `json:"replace_from"`
 	}
 	if err := s.call(ctx, "complete.slash", params, &out); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return out.Items, nil
+	// replace_from is where the completed token starts: 1 for the command
+	// name (after "/"), past the last space for an argument stage. Older
+	// serves without it get the same rule computed here.
+	rf := strings.LastIndex(text, " ") + 1
+	if rf == 0 {
+		rf = 1
+	}
+	if out.ReplaceFrom != nil && *out.ReplaceFrom >= 0 && *out.ReplaceFrom <= len(text) {
+		rf = *out.ReplaceFrom
+	}
+	return out.Items, rf, nil
 }
 
 // ExecSlash runs one slash command against the live session's worker.

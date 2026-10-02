@@ -147,8 +147,10 @@ function onKey(e: KeyboardEvent) {
       }
       return;
     }
-    // Command palette: while the draft is a bare "/suffix", arrows pick,
-    // enter/tab run, esc dismisses. Typing flows through untouched.
+    // Command palette — every stage of a slash line (command, then each
+    // argument). Arrows / ctrl+n,p pick; Tab completes and drills into the
+    // next stage; Enter runs (or drills when the command needs a choice);
+    // esc dismisses. Typing flows through untouched.
     if (paletteVisible()) {
       if (key === "ArrowDown" || (e.ctrlKey && key === "n")) {
         e.preventDefault();
@@ -160,9 +162,19 @@ function onKey(e: KeyboardEvent) {
         actions.paletteMove(-1);
         return;
       }
-      if ((key === "Enter" && !e.shiftKey) || key === "Tab") {
+      if (key === "Tab" && !e.shiftKey) {
         e.preventDefault();
-        actions.runPalette();
+        actions.paletteComplete();
+        return;
+      }
+      if (key === "Tab" && e.shiftKey) {
+        e.preventDefault();
+        actions.paletteMove(-1);
+        return;
+      }
+      if (key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        void actions.runPalette();
         return;
       }
       if (key === "Escape") {

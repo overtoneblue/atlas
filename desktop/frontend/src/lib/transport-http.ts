@@ -228,10 +228,16 @@ export async function GetCommands(): Promise<Catalog> {
 }
 
 // Live fuzzy slash/skill completions for the composer draft.
-export async function CompleteSlash(text: string, sessionID: string): Promise<Completion[]> {
+// replace_from: where the completed token starts in `text` (1 = the command
+// name after "/", else just past the last space — an argument stage).
+export async function CompleteSlash(
+  text: string,
+  sessionID: string,
+): Promise<{ items: Completion[]; replace_from: number }> {
   const q = `text=${encodeURIComponent(text)}&session=${encodeURIComponent(sessionID)}`;
-  const r = await get<{ items?: Completion[] }>(`/api/complete?${q}`);
-  return r.items ?? [];
+  const r = await get<{ items?: Completion[]; replace_from?: number }>(`/api/complete?${q}`);
+  const fallback = text.includes(" ") ? text.lastIndexOf(" ") + 1 : 1;
+  return { items: r.items ?? [], replace_from: typeof r.replace_from === "number" ? r.replace_from : fallback };
 }
 
 // Run one slash command against the open session (stored or runtime id).

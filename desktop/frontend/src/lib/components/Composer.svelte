@@ -1,6 +1,19 @@
 <script lang="ts">
-  import { s, actions, modelPickRows, modelPickVisible, paletteItems, paletteVisible } from "../state.svelte";
+  import {
+    s,
+    actions,
+    modelPickRows,
+    modelPickVisible,
+    paletteItems,
+    paletteSelIndex,
+    paletteVisible,
+    slashHint,
+    slashParse,
+  } from "../state.svelte";
   import { preLiftComposer } from "../mobile-viewport";
+
+  // usage line for the command being typed ("/compress [here [N] | …]")
+  const hint = $derived(slashHint());
 
   let ta = $state<HTMLTextAreaElement | null>(null);
   let root = $state<HTMLElement | null>(null);
@@ -101,22 +114,32 @@
     </div>
   {/if}
   {#if paletteVisible()}
-    <div class="palette">
-      {#each paletteItems(s.draft) as c, i}
+    {@const items = paletteItems(s.draft)}
+    {@const sel = paletteSelIndex()}
+    {@const stage = slashParse(s.draft)?.stage}
+    <div class="palette" class:argstage={stage === "arg"}>
+      {#if hint}<div class="pusage">{hint}</div>{/if}
+      {#each items as c, i}
         <div
           class="prow"
-          class:sel={i === s.paletteIdx}
+          class:sel={i === sel}
+          class:cur={c.current}
           onmousedown={(e) => e.preventDefault()}
-          onclick={() => actions.runPaletteAt(i)}
+          onclick={() => void actions.runPaletteAt(i)}
           role="presentation"
         >
-          <span class="pname">{c.name}</span>
-          {#if c.kind !== "local"}<span class="pkind {c.kind}">{c.kind === "skill" ? "skill" : "cmd"}</span>{/if}
+          <span class="pname">{c.name}{#if c.current}<span class="pcur"> ✓</span>{/if}</span>
+          {#if c.kind === "skill"}<span class="pkind skill">skill</span>{:else if c.kind === "command"}<span class="pkind">cmd</span>{/if}
           <span class="pdesc">{c.desc}</span>
+          {#if c.more}<span class="pmore" title="takes arguments — Tab">›</span>{/if}
         </div>
       {/each}
-      <div class="phint">↑↓ pick · enter run · esc dismiss</div>
+      <div class="phint">
+        {stage === "arg" ? "↑↓ pick · tab complete · enter run · esc dismiss" : "↑↓ pick · tab complete (› = has options) · enter run · esc dismiss"}
+      </div>
     </div>
+  {:else if hint && s.focus === "composer" && s.mode === "INSERT"}
+    <div class="palette usage-only"><div class="pusage">{hint}</div></div>
   {/if}
   <div class="cstack">
     {#if s.attachments.length}

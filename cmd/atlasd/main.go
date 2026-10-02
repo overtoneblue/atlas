@@ -548,12 +548,15 @@ func (a *api) complete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"items": []any{}})
 		return
 	}
-	items, err := a.svc.CompleteSlash(text, q.Get("session"))
+	items, rf, err := a.svc.CompleteSlash(text, q.Get("session"))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, map[string]any{"items": items})
+	if items == nil {
+		items = []hermes.Completion{}
+	}
+	writeJSON(w, map[string]any{"items": items, "replace_from": rf})
 }
 
 // exec runs one slash command against the open session and returns its
