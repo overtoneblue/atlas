@@ -46,6 +46,59 @@ type Serve struct {
 	mu      sync.Mutex
 	conn    *wsConn
 	onEvent func(ServeEvent) // server->client event frames (set by Watch)
+
+	// connection health, for the status bar: "configured" (a token exists)
+	// is not "reachable" — a dead serve used to show a green dot.
+	lastErr   string
+	lastErrAt time.Time
+	upSince   time.Time
+}
+
+// Health is the live connection state of the serve socket.
+type Health struct {
+	Up      bool    `json:"up"`
+	Since   float64 `json:"since,omitempty"` // unix seconds the current connection came up
+	Err     string  `json:"error,omitempty"` // last dial/read failure while down
+	ErrAt   float64 `json:"error_at,omitempty"`
+	BaseURL string  `json:"url"`
+}
+
+// Health reports whether a live socket to hermes-serve exists right now.
+func (s *Serve) Health() Health {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := Health{BaseURL: s.BaseURL}
+	if s.conn != nil && !s.conn.isClosed() {
+		h.Up = true
+		if !s.upSince.IsZero() {
+			h.Since = float64(s.upSince.Unix())
+		}
+		return h
+	}
+	h.Err = s.lastErr
+	if !s.lastErrAt.IsZero() {
+		h.ErrAt = float64(s.lastErrAt.Unix())
+	}
+	return h
+}
+
+// Connected is Health().Up.
+func (s *Serve) Connected() bool { return s.Health().Up }
+
+// Ensure dials the socket now when it is down (bounded by ctx). Sends use it
+// to fail fast and visibly instead of accepting a message that cannot leave.
+func (s *Serve) Ensure(ctx context.Context) error {
+	_, err := s.getConn(ctx)
+	return err
+}
+
+func (s *Serve) noteErr(err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	s.lastErr, s.lastErrAt = err.Error(), time.Now()
+	s.mu.Unlock()
 }
 
 // NewServeFromEnv builds the serve client from the environment (see
@@ -174,8 +227,9 @@ func (s *Serve) Resume(ctx context.Context, sessionID string) (string, error) {
 
 // resumeWire is the slice of session.resume's result Atlas reads.
 type resumeWire struct {
-	SessionID string `json:"session_id"`
-	Running   bool   `json:"running"`
+	SessionID string          `json:"session_id"`
+	Running   bool            `json:"running"`
+	Info      json.RawMessage `json:"info"`
 }
 
 // ModelOptions fetches the model-picker payload (providers + models +
@@ -229,9 +283,11 @@ func (s *Serve) getConn(ctx context.Context) (*wsConn, error) {
 	}
 	c, err := dialWS(ctx, s.BaseURL, s.Token, s.onEvent)
 	if err != nil {
+		s.lastErr, s.lastErrAt = err.Error(), time.Now()
 		return nil, err
 	}
 	s.conn = c
+	s.upSince, s.lastErr = time.Now(), ""
 	return c, nil
 }
 
@@ -239,6 +295,7 @@ func (s *Serve) dropIf(c *wsConn) {
 	s.mu.Lock()
 	if s.conn == c {
 		s.conn = nil
+		s.lastErr, s.lastErrAt = c.closeErr().Error(), time.Now()
 	}
 	s.mu.Unlock()
 	c.close()

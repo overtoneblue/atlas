@@ -34,13 +34,24 @@ const (
 // Start connects the serve event stream (reconnecting forever) and starts
 // the stuck-turn watchdog. Safe to skip (tests, serve unconfigured).
 func (d *Service) Start() {
+	go d.probeLoop() // api/hub health is useful even without serve
 	if !d.serve.Configured() {
 		log.Printf("atlasd: hermes-serve not configured — turns, commands and models unavailable")
 		return
 	}
-	d.serve.Watch(d.onServeEvent, d.onServeReconnect)
+	d.serve.Watch(d.onServeEvent, d.onServeReconnect, d.onServeLink)
 	go d.turnWatchdog()
 	go d.adoptWhenReady()
+}
+
+// onServeLink relays serve socket up/down edges to every client so the
+// status bar shows the real link state (and a reconnect can resync).
+func (d *Service) onServeLink(up bool) {
+	link := "down"
+	if up {
+		link = "up"
+	}
+	d.emit(TurnEvent{Kind: "link", Link: link})
 }
 
 // adoptWhenReady adopts turns already running on serve (started by a previous
@@ -152,12 +163,24 @@ func (e *resumeErr) Unwrap() error { return e.err }
 
 // runtimeFor returns the live runtime id for a stored session, resuming it
 // (which also attaches this connection as a viewer) when unknown or forced.
+// Concurrent callers for one chat are serialised so a burst (open + send +
+// model picker) resumes once. A fresh binding runs the route guard before
+// anything is submitted on it.
 func (d *Service) runtimeFor(ctx context.Context, stored string, force bool) (string, error) {
 	d.rtMu.Lock()
-	rt, prof := d.runtimes[stored], d.profileOf[stored]
+	rt := d.runtimes[stored]
 	d.rtMu.Unlock()
 	if rt != "" && !force {
 		return rt, nil
+	}
+	lk := d.bindLock(stored)
+	lk.Lock()
+	defer lk.Unlock()
+	d.rtMu.Lock()
+	cur, prof := d.runtimes[stored], d.profileOf[stored]
+	d.rtMu.Unlock()
+	if cur != "" && (!force || cur != rt) {
+		return cur, nil // someone bound (or re-bound) it while we waited
 	}
 	info, err := d.serve.ResumeWith(ctx, stored, prof)
 	if err != nil {
@@ -170,6 +193,9 @@ func (d *Service) runtimeFor(ctx context.Context, stored string, force bool) (st
 	d.rtMu.Lock()
 	d.bindRuntimeLocked(stored, rt)
 	d.rtMu.Unlock()
+	li := hermes.ParseLiveInfo(info.Info)
+	d.emitInfo(d.mergeInfo(stored, li))
+	d.guardRoute(ctx, stored, prof, rt, li)
 	return rt, nil
 }
 
@@ -283,6 +309,16 @@ func (d *Service) SendMessage(profile, sessionID string, input json.RawMessage) 
 	if strings.TrimSpace(text) == "" && len(images) == 0 {
 		return ErrEmpty
 	}
+	// Fail fast and visibly: a message accepted while serve is unreachable
+	// would only die later, after the composer already cleared.
+	if !d.serve.Connected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		err := d.serve.Ensure(ctx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrUnreachable, err)
+		}
+	}
 
 	d.mu.Lock()
 	if _, busy := d.turns[sessionID]; busy {
@@ -294,6 +330,7 @@ func (d *Service) SendMessage(profile, sessionID string, input json.RawMessage) 
 	d.mu.Unlock()
 
 	d.noteProfile(sessionID, profile)
+	d.clearFailure(sessionID)
 	d.emit(TurnEvent{Kind: "started", SessionID: sessionID, Profile: profile})
 	go d.startTurn(turn, sessionID, text, images)
 	return nil
@@ -316,12 +353,25 @@ func (d *Service) startTurn(turn *activeTurn, sessionID, text string, images []i
 		return err
 	})
 	if err != nil {
-		d.finishTurn(sessionID, turn, err.Error(), false)
+		d.failTurn(sessionID, turn, "not sent — "+err.Error(), "send_failed")
 		return
 	}
-	if status != "" && status != "streaming" {
+	switch status {
+	case "", "streaming":
+	case "queued", "steered", "redirected":
+		// The session was mid-turn elsewhere (Discord, the desktop app): serve
+		// folded this message into that run. Say so — otherwise it looks lost.
 		log.Printf("atlas:turn submit session=%s status=%s (session was busy elsewhere)", sessionID, status)
+		d.emit(TurnEvent{Kind: "note", SessionID: sessionID, Text: "the chat was busy in another client — your message was " + status + " into that turn"})
+	default:
+		log.Printf("atlas:turn submit session=%s status=%s", sessionID, status)
 	}
+}
+
+// failTurn ends a turn as failed and remembers why (reload-proof).
+func (d *Service) failTurn(stored string, turn *activeTurn, msg, code string) {
+	d.noteFailure(stored, TurnFailure{Error: msg, Code: code, At: nowSec()})
+	d.finishTurnCode(stored, turn, msg, code, false)
 }
 
 // StopTurn interrupts the session's in-flight turn. serve ends it with a
@@ -435,8 +485,20 @@ func (d *Service) applyServeEvent(stored string, ev hermes.ServeEvent) {
 		turn.lastEvent = time.Now()
 	}
 	d.mu.Unlock()
-	if ev.Type == "session.info" {
+	switch ev.Type {
+	case "session.info":
 		d.applySessionInfo(stored, ev)
+		return
+	case "session.usage":
+		// mid-turn usage tick (1s cadence while counters move): live tok/s
+		// and context % for the status bar.
+		var p struct {
+			Usage *hermes.LiveUsage `json:"usage"`
+		}
+		if json.Unmarshal(ev.Payload, &p) == nil && p.Usage != nil {
+			si := d.mergeUsage(stored, p.Usage)
+			d.emitInfo(si)
+		}
 		return
 	}
 	if turn == nil {
@@ -489,11 +551,21 @@ func (d *Service) applyServeEvent(stored string, ev hermes.ServeEvent) {
 		d.emit(TurnEvent{Kind: "tool", SessionID: stored, Tool: p.Name, ToolState: "done"})
 	case "message.complete":
 		var p struct {
-			Status        string `json:"status"`
-			Error         string `json:"error"`
-			FailureReason string `json:"failure_reason"`
+			Status        string            `json:"status"`
+			Error         string            `json:"error"`
+			FailureReason string            `json:"failure_reason"`
+			Usage         *hermes.LiveUsage `json:"usage"`
+			Surface       *struct {
+				Code     string `json:"code"`
+				Layer    string `json:"layer"`
+				Provider string `json:"provider"`
+				Model    string `json:"model"`
+			} `json:"error_surface"`
 		}
 		_ = json.Unmarshal(ev.Payload, &p)
+		if p.Usage != nil {
+			d.emitInfo(d.mergeUsage(stored, p.Usage))
+		}
 		switch p.Status {
 		case "interrupted":
 			d.finishTurn(stored, turn, "", true)
@@ -505,8 +577,16 @@ func (d *Service) applyServeEvent(stored string, ev hermes.ServeEvent) {
 			if msg == "" {
 				msg = "the turn ended with an error"
 			}
-			d.finishTurn(stored, turn, msg, false)
+			code := p.FailureReason
+			if p.Surface != nil && p.Surface.Code != "" {
+				code = p.Surface.Code
+			}
+			if p.Surface != nil && p.Surface.Provider != "" && p.Surface.Model != "" {
+				msg = fmt.Sprintf("%s (route: %s · %s)", msg, p.Surface.Model, p.Surface.Provider)
+			}
+			d.failTurn(stored, turn, msg, code)
 		default:
+			d.clearFailure(stored)
 			d.finishTurn(stored, turn, "", false)
 		}
 	case "error":
@@ -522,40 +602,30 @@ func (d *Service) applyServeEvent(stored string, ev hermes.ServeEvent) {
 	}
 }
 
-// applySessionInfo relays the rolling throughput serve attaches to
-// session.info (avg_tps over the last 10 API calls — same numbers the CLI
-// status bar and the official desktop show). Emitted at turn settle, so it
-// also seeds the NEXT turn's live tag with the previous reading.
+// applySessionInfo folds serve's session.info (model, provider, reasoning,
+// fast, usage — avg_tps over the last 10 API calls, the same numbers the CLI
+// status bar and the official desktop show) into the info cache and relays
+// it. Emitted at every settle/switch, so it also seeds the NEXT turn's tok/s.
 func (d *Service) applySessionInfo(stored string, ev hermes.ServeEvent) {
-	var p struct {
-		TPS     float64 `json:"avg_tps"`
-		Latency float64 `json:"avg_latency_s"`
-		Usage   *struct {
-			TPS     float64 `json:"avg_tps"`
-			Latency float64 `json:"avg_latency_s"`
-		} `json:"usage"`
-	}
-	if json.Unmarshal(ev.Payload, &p) != nil {
+	li := hermes.ParseLiveInfo(ev.Payload)
+	if li == nil {
 		return
 	}
-	tps, lat := p.TPS, p.Latency
-	if p.Usage != nil {
-		if tps == 0 {
-			tps = p.Usage.TPS
-		}
-		if lat == 0 {
-			lat = p.Usage.Latency
-		}
+	si := d.mergeInfo(stored, li)
+	d.emitInfo(si)
+	// legacy "stats" frame for clients built before the info event
+	if si != nil && si.TPS > 0 {
+		d.emit(TurnEvent{Kind: "stats", SessionID: stored, TPS: si.TPS, Latency: si.Latency})
 	}
-	if tps <= 0 {
-		return
-	}
-	d.emit(TurnEvent{Kind: "stats", SessionID: stored, TPS: tps, Latency: lat})
 }
 
 // finishTurn ends a turn exactly once: drops it from the live map, emits an
 // error (when given) then done. interrupted marks a user stop.
 func (d *Service) finishTurn(stored string, turn *activeTurn, errMsg string, interrupted bool) {
+	d.finishTurnCode(stored, turn, errMsg, "", interrupted)
+}
+
+func (d *Service) finishTurnCode(stored string, turn *activeTurn, errMsg, code string, interrupted bool) {
 	d.mu.Lock()
 	if d.turns[stored] != turn {
 		d.mu.Unlock()
@@ -570,9 +640,9 @@ func (d *Service) finishTurn(stored string, turn *activeTurn, errMsg string, int
 	close(turn.done)
 	log.Printf("atlas:turn done session=%s deltas=%d chars=%d err=%q stopped=%v", stored, deltas, chars, errMsg, stopped)
 	if errMsg != "" {
-		d.emit(TurnEvent{Kind: "error", SessionID: stored, Error: errMsg})
+		d.emit(TurnEvent{Kind: "error", SessionID: stored, Error: errMsg, Code: code})
 	}
-	d.emit(TurnEvent{Kind: "done", SessionID: stored, OK: errMsg == "", Stopped: stopped})
+	d.emit(TurnEvent{Kind: "done", SessionID: stored, OK: errMsg == "", Stopped: stopped, Error: errMsg, Code: code})
 }
 
 // ---- chat management (hide = archive in place; new = mint) -----------------
@@ -691,14 +761,21 @@ func (d *Service) SetModel(sessionID, value string, confirmed bool) (map[string]
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	d.rtMu.Lock()
-	rt := d.runtimes[sessionID]
-	d.rtMu.Unlock()
-	target := sessionID
-	if rt != "" {
-		target = rt
+	// Through withRuntime: an unbound chat (or a runtime serve reaped since)
+	// is resumed first — config.set on a stored id is a guaranteed 4001.
+	var out map[string]any
+	err := d.withRuntime(ctx, sessionID, nil, func(rt string) (e error) {
+		out, e = d.serve.ConfigSetModel(ctx, rt, value, confirmed)
+		return e
+	})
+	if err != nil {
+		return nil, err
 	}
-	return d.serve.ConfigSetModel(ctx, target, value, confirmed)
+	if cr, _ := out["confirm_required"].(bool); !cr {
+		// an explicit pick supersedes any pending drift note
+		d.emitInfo(d.setInfoNote(sessionID, func(si *SessionInfo) { si.Drift = "" }))
+	}
+	return out, nil
 }
 
 // Channels reads the native shape store for one profile (categories,

@@ -86,6 +86,7 @@
             role="presentation"
           >
             <span class="pname">{m.name}{#if m.current}<span class="pcur"> ✓</span>{/if}</span>
+            {#if m.recent}<span class="pkind recent">recent</span>{/if}
             <span class="pkind">{m.slug}</span>
             <span class="pdesc">{m.meta}</span>
           </div>
@@ -94,7 +95,7 @@
           <div class="mconfirm">{s.modelConfirm.message}</div>
           <div class="phint">enter again = switch anyway · esc cancels</div>
         {:else}
-          <div class="phint">{modelPickRows(s.draft).length} models · ↑↓ pick · enter switch · esc close</div>
+          <div class="phint">{modelPickRows(s.draft).length} models · type to filter (words match model or provider) · ↑↓ pick · enter switch · esc close</div>
         {/if}
       {/if}
     </div>
@@ -154,6 +155,11 @@
           : "open a workstream to chat"}
     ></textarea>
   </div>
+  {#if s.open && (!s.link.stream || s.link.serve === "down" || s.status === null)}
+    <span class="cwarn" title="sends fail fast and hand your message back while this lasts">
+      {s.status === null ? "atlasd offline" : !s.link.stream ? "reconnecting…" : "hermes-serve down"}
+    </span>
+  {/if}
   {#if s.open && s.turnBusy[s.open.id]}
     <button
       class="stop"

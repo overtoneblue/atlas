@@ -40,6 +40,24 @@
   --cyan: #748886;
   --blue: #6b8078;
   --purple: #9b7f9c; /* raised from #7d677e — author name at 4.1:1 -> ~5.9:1 */
+
+  /* base16 rungs verbatim from nixos-config modules/hosts/parts-options/
+     _theme.nix — raised surfaces (chips, cards, sheets) and interactive
+     borders use the real scheme, not new colors */
+  --base02: #181411;
+  --base03: #332c26;
+  --base04: #564a40;
+  --base06: #e7dfcf;
+  --base0F: #8b7766;
+
+  /* derived accents: the palette's yellow/red/green at low alpha */
+  --accent: var(--yellow);
+  --accent-wash: rgba(170, 149, 109, 0.08);
+  --accent-wash2: rgba(170, 149, 109, 0.16);
+  --red-wash: rgba(176, 106, 99, 0.09);
+  --green-wash: rgba(114, 139, 114, 0.12);
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --shadow-pop: 0 18px 60px rgba(0, 0, 0, 0.6);
 }
 
 * {
@@ -457,8 +475,25 @@ button {
   background: var(--surface);
 }
 
-.composer.active {
-  background: var(--surface2);
+/* the input sits in its own field: a calm card that lights up (palette
+   yellow hairline) when INSERT owns the keyboard */
+.composer .cstack {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 3px 10px;
+  transition:
+    border-color 140ms var(--ease),
+    box-shadow 140ms var(--ease);
+}
+
+.composer.active .cstack {
+  border-color: var(--base03);
+}
+
+.composer.insert .cstack {
+  border-color: rgba(170, 149, 109, 0.55);
+  box-shadow: 0 0 0 3px var(--accent-wash);
 }
 
 .composer textarea {
@@ -480,12 +515,16 @@ button {
 
 .composer button {
   flex: none;
-  background: var(--sel);
+  background: var(--base02);
   color: var(--fg);
   border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 4px 10px;
+  border-radius: 8px;
+  padding: 6px 12px;
+  margin-bottom: 2px;
   cursor: pointer;
+  transition:
+    border-color 120ms var(--ease),
+    color 120ms var(--ease);
 }
 
 .composer button:hover {
@@ -534,6 +573,12 @@ button {
   flex: 1;
 }
 
+.statusbar .dots {
+  display: flex;
+  gap: 10px;
+  flex: none;
+}
+
 .statusbar .dots span::before {
   content: "○ ";
   color: var(--faint);
@@ -544,9 +589,18 @@ button {
   color: var(--green);
 }
 
+.statusbar .dots .bad {
+  color: var(--red);
+}
+
 .statusbar .dots .bad::before {
   content: "● ";
   color: var(--red);
+}
+
+.statusbar .dots .warn::before {
+  content: "◌ ";
+  color: var(--yellow);
 }
 
 .statusbar .ver {
@@ -1488,5 +1542,502 @@ button {
   }
   .help .hk {
     width: auto;
+  }
+}
+
+/* =====================================================================
+   0.21 refresh — live session chips, settings sheet, failure surfacing.
+   Same palette (base16 from nixos-config); only new rungs of it.
+   ===================================================================== */
+
+/* ------- chat head ------- */
+
+.chat-head .spacer {
+  flex: 1;
+}
+
+.chat-head .head-live {
+  flex: none;
+  color: var(--green);
+  font-size: 12.5px;
+  animation: atlas-pulse 1.6s ease-in-out infinite;
+}
+
+/* ------- status bar: live session chips ------- */
+
+.statusbar .chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+.statusbar .chip {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--base02);
+  color: var(--dim2);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.statusbar button.chip {
+  cursor: pointer;
+}
+
+.statusbar .chip.model {
+  color: var(--fg);
+  border-color: var(--base03);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.statusbar button.chip.model:hover {
+  border-color: var(--yellow);
+  color: var(--fg-hi);
+}
+
+.statusbar .chip.warn,
+.statusbar .chip .chip-warn {
+  color: var(--yellow);
+  border-color: rgba(170, 149, 109, 0.5);
+}
+
+.statusbar .chip.ok {
+  color: var(--green);
+  border-color: rgba(114, 139, 114, 0.45);
+}
+
+.statusbar .chip.tps {
+  color: var(--cyan);
+}
+
+.statusbar .chip.tps.live {
+  color: var(--green);
+  border-color: rgba(114, 139, 114, 0.45);
+}
+
+.statusbar .ctxbar {
+  position: relative;
+  width: 34px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--base03);
+  overflow: hidden;
+}
+
+.statusbar .ctxfill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--dim2);
+  transition: width 400ms var(--ease);
+}
+
+.statusbar .chip.ctx.warn .ctxfill {
+  background: var(--yellow);
+}
+
+.statusbar .chip.ctx.bad {
+  color: var(--red);
+}
+
+.statusbar .chip.ctx.bad .ctxfill {
+  background: var(--red);
+}
+
+/* ------- system rows (failed-turn boundary, model switches, notices) ------- */
+
+.sysrow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 2px 18px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  color: var(--dim);
+  font-size: 12.5px;
+  min-width: 0;
+}
+
+.sysrow .sysglyph {
+  flex: none;
+  color: var(--faint);
+}
+
+.sysrow .systext {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sysrow .time {
+  flex: none;
+  margin-left: auto;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.sysrow.failed {
+  color: var(--red);
+  background: var(--red-wash);
+}
+
+.sysrow.failed .sysglyph {
+  color: var(--red);
+}
+
+.sysrow.vs {
+  box-shadow: inset 2px 0 0 var(--yellow);
+}
+
+/* ------- failure card (the real cause + what to do) ------- */
+
+.failcard {
+  margin: 10px 18px 12px;
+  padding: 11px 14px 12px;
+  border: 1px solid rgba(176, 106, 99, 0.35);
+  border-left: 3px solid var(--red);
+  border-radius: 4px 10px 10px 4px;
+  background: linear-gradient(180deg, var(--red-wash), transparent 140%), var(--surface);
+  animation: atlas-rise 180ms var(--ease);
+}
+
+.failcard .fc-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.fc-glyph {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.failcard .fc-title {
+  color: var(--fg-hi);
+  font-weight: 600;
+}
+
+.failcard .time {
+  color: var(--dim);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.failcard .fc-code {
+  margin-left: auto;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--dim2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.failcard .fc-err {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 30vh;
+  overflow: auto;
+}
+
+.failcard .fc-hint {
+  margin-top: 6px;
+  color: var(--dim2);
+  font-size: 13.5px;
+}
+
+.failcard .fc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.fc-btn {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--base02);
+  color: var(--fg);
+  font-size: 13.5px;
+  cursor: pointer;
+  transition:
+    border-color 120ms var(--ease),
+    color 120ms var(--ease);
+}
+
+.fc-btn:hover,
+.fc-btn:focus-visible {
+  border-color: var(--yellow);
+  color: var(--fg-hi);
+}
+
+.fc-btn.primary {
+  border-color: rgba(170, 149, 109, 0.5);
+  color: var(--fg-hi);
+}
+
+.fc-btn.ghost {
+  background: none;
+  border-color: transparent;
+  color: var(--dim);
+}
+
+.fc-btn kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 0 5px;
+  border: 1px solid var(--base03);
+  border-radius: 4px;
+  color: var(--yellow);
+}
+
+.driftcard {
+  display: flex;
+  gap: 8px;
+  margin: 8px 18px;
+  padding: 7px 12px;
+  border-left: 2px solid var(--yellow);
+  border-radius: 0 8px 8px 0;
+  background: var(--accent-wash);
+  color: var(--dim2);
+  font-size: 13.5px;
+}
+
+.driftcard .fc-glyph {
+  color: var(--yellow);
+}
+
+/* ------- composer extras ------- */
+
+.composer .cwarn {
+  flex: none;
+  align-self: center;
+  padding: 2px 9px;
+  border: 1px solid rgba(176, 106, 99, 0.4);
+  border-radius: 999px;
+  color: var(--red);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pkind.recent {
+  color: var(--yellow);
+  border-color: rgba(170, 149, 109, 0.4);
+}
+
+/* ------- settings sheet ------- */
+
+.st-scrim {
+  z-index: 52;
+  animation: lbfade 120ms ease-out;
+}
+
+.st-panel {
+  width: min(620px, 100%);
+  max-height: 80vh;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--base03);
+  border-radius: 12px;
+  padding: 14px 8px 10px;
+  box-shadow: var(--shadow-pop);
+  animation: atlas-rise 160ms var(--ease);
+}
+
+.st-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.st-title {
+  color: var(--fg-hi);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.st-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim2);
+  font-size: 13px;
+}
+
+.st-keys {
+  margin-left: auto;
+  flex: none;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.st-sec {
+  padding: 10px 12px 3px;
+  color: var(--yellow);
+  font-size: 11.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.st-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  grid-template-areas:
+    "label val"
+    ".     hint";
+  column-gap: 14px;
+  align-items: baseline;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.st-row:hover {
+  background: var(--accent-wash);
+}
+
+.st-row.cur {
+  background: var(--accent-wash2);
+  box-shadow: inset 2px 0 0 var(--yellow);
+}
+
+.st-row.ro {
+  cursor: default;
+}
+
+.st-row.busy .st-val {
+  opacity: 0.55;
+}
+
+.st-label {
+  grid-area: label;
+  color: var(--dim2);
+}
+
+.st-row.cur .st-label {
+  color: var(--fg-hi);
+}
+
+.st-val {
+  grid-area: val;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.st-val.ok {
+  color: var(--green);
+}
+
+.st-val.bad {
+  color: var(--red);
+}
+
+.st-val.warn,
+.st-val.accent {
+  color: var(--yellow);
+}
+
+.st-hint {
+  grid-area: hint;
+  color: var(--dim);
+  font-size: 12.5px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.st-err {
+  margin: 6px 12px 2px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--red);
+  border-radius: 0 6px 6px 0;
+  background: var(--red-wash);
+  color: var(--red);
+  font-size: 13px;
+}
+
+.st-step {
+  all: unset;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--dim);
+}
+
+.st-step:hover {
+  color: var(--yellow);
+}
+
+@keyframes atlas-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .failcard,
+  .st-panel,
+  .st-scrim,
+  .chat-head .head-live {
+    animation: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .statusbar .chips .chip:not(.model):not(.tps) {
+    display: none;
+  }
+  .statusbar .chip.model {
+    max-width: 150px;
+  }
+  .st-row {
+    grid-template-columns: 110px minmax(0, 1fr);
+  }
+  .st-keys {
+    display: none;
+  }
+  .composer .cstack {
+    padding: 2px 8px;
   }
 }

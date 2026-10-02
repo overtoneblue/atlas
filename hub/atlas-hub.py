@@ -384,6 +384,61 @@ def find_session(session_id: str):
     return None, None
 
 
+def session_route(profile: str, session_id: str):
+    """Read-only view of one session's persisted runtime routes.
+
+    Hermes keeps two shapes in sessions.model_config: the top-level
+    provider/base_url/api_mode every desktop/TUI/Atlas model switch writes,
+    and the nested gateway_runtime the messaging gateway writes per turn.
+    Resume prefers the nested one, so a chat that last ran in Discord on
+    provider X and was then switched in Atlas comes back as (Atlas model,
+    provider X). atlasd reads this to detect and heal exactly that pairing.
+    """
+    profs = [p for p in PROFILES if p["name"] == (profile or "default")] or PROFILES
+    for prof in profs:
+        con = sqlite3.connect(f"file:{prof['db']}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        try:
+            row = con.execute(
+                "SELECT source, model, model_config FROM sessions WHERE id=?", (session_id,)
+            ).fetchone()
+        finally:
+            con.close()
+        if row is None:
+            continue
+        try:
+            mc = json.loads(row["model_config"] or "{}")
+        except Exception:
+            mc = {}
+        if not isinstance(mc, dict):
+            mc = {}
+        nested = mc.get("gateway_runtime") if isinstance(mc.get("gateway_runtime"), dict) else {}
+
+        def side(d, model=""):
+            out: dict = {k: str(d.get(k) or "") for k in ("provider", "base_url", "api_mode") if d.get(k)}
+            if model:
+                out["model"] = model
+            if d.get("fallback_active"):
+                out["fallback_active"] = True
+            return out
+
+        rc = mc.get("reasoning_config") if isinstance(mc.get("reasoning_config"), dict) else {}
+        reasoning = ""
+        if rc:
+            reasoning = "none" if rc.get("enabled") is False else str(rc.get("effort") or "")
+        return {
+            "ok": True,
+            "profile": prof["name"],
+            "session": session_id,
+            "source": row["source"] or "",
+            "model": row["model"] or "",
+            "reasoning": reasoning,
+            "top": side(mc, str(mc.get("model") or "")),
+            "nested": side(nested),
+        }
+    return {"ok": False, "error": "unknown session"}
+
+
 def load_sessions(prof, include_hidden=False):
     con = sqlite3.connect(f"file:{prof['db']}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
@@ -1343,6 +1398,21 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(404, {"error": "no log"})
                     return
                 self._json(200, {"text": text})
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
+        if self.path.split("?")[0] == "/route":
+            if AUTH and self.headers.get("Authorization") != f"Bearer {AUTH}":
+                self._json(401, {"error": "unauthorized"})
+                return
+            try:
+                from urllib.parse import parse_qs, urlparse
+
+                q = parse_qs(urlparse(self.path).query)
+                self._json(200, session_route(
+                    (q.get("profile") or ["default"])[0],
+                    (q.get("session") or [""])[0],
+                ))
             except Exception as e:
                 self._json(500, {"error": str(e)})
             return

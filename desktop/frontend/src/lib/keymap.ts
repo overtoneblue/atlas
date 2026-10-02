@@ -43,6 +43,53 @@ function onKey(e: KeyboardEvent) {
     return;
   }
 
+  // Settings sheet: j/k move, h/l step a value, enter acts, esc/q/S close.
+  if (s.settingsOpen) {
+    switch (key) {
+      case "j":
+      case "ArrowDown":
+        e.preventDefault();
+        actions.settingsMove(1);
+        return;
+      case "k":
+      case "ArrowUp":
+        e.preventDefault();
+        actions.settingsMove(-1);
+        return;
+      case "h":
+      case "ArrowLeft":
+        e.preventDefault();
+        void actions.settingsAct(-1);
+        return;
+      case "l":
+      case "ArrowRight":
+        e.preventDefault();
+        void actions.settingsAct(1);
+        return;
+      case "Enter":
+      case " ":
+        e.preventDefault();
+        void actions.settingsAct(0);
+        return;
+      case "g":
+        e.preventDefault();
+        s.settingsIdx = 0;
+        return;
+      case "G":
+        e.preventDefault();
+        actions.settingsMove(-1 - s.settingsIdx);
+        return;
+      case "Escape":
+      case "q":
+      case "S":
+        e.preventDefault();
+        actions.closeSettings();
+        return;
+      default:
+        return;
+    }
+  }
+
   // Node form / move picker: the component owns its keys (Escape, Enter,
   // typing) while a modal is up; the router stays out entirely.
   if (s.modal) return;
@@ -336,6 +383,22 @@ function onKey(e: KeyboardEvent) {
     case "H":
       e.preventDefault();
       actions.toggleHiddenView();
+      break;
+    case "S":
+      e.preventDefault();
+      actions.openSettings();
+      break;
+    case "M":
+      // model picker for the open chat, from anywhere in NORMAL mode
+      e.preventDefault();
+      void actions.openModelPicker();
+      break;
+    case "R":
+      // retry is deliberate: only when the open chat shows a failed turn
+      // (Hermes' /retry rewinds the last turn — never fire it blind)
+      e.preventDefault();
+      if (s.open && s.failures[s.open.id] && !s.turnBusy[s.open.id]) void actions.retryTurn();
+      else s.statusText = "R retries a failed turn — nothing to retry here";
       break;
     default:
       break;

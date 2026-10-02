@@ -236,6 +236,80 @@ func (h *Hub) FetchSpawnLog(ctx context.Context, kind, id string, task, lines in
 	return out.Text, nil
 }
 
+// RouteSide is one persisted runtime route on a session row.
+type RouteSide struct {
+	Model          string `json:"model,omitempty"`
+	Provider       string `json:"provider,omitempty"`
+	BaseURL        string `json:"base_url,omitempty"`
+	APIMode        string `json:"api_mode,omitempty"`
+	FallbackActive bool   `json:"fallback_active,omitempty"`
+}
+
+// SessionRoute is the hub's read-only view of a session's persisted routes
+// (state.db sessions.model + model_config): the top-level keys every desktop
+// /TUI/Atlas switch writes, and the nested gateway_runtime the messaging
+// gateway writes per turn. Hermes' resume prefers the nested one, which is
+// how a Discord-era provider ends up paired with an Atlas-picked model.
+type SessionRoute struct {
+	OK      bool      `json:"ok"`
+	Profile string    `json:"profile"`
+	Session string    `json:"session"`
+	Source  string    `json:"source,omitempty"`
+	Model   string    `json:"model,omitempty"` // sessions.model column
+	Reason  string    `json:"reasoning,omitempty"`
+	Top     RouteSide `json:"top"`
+	Nested  RouteSide `json:"nested"`
+	Error   string    `json:"error,omitempty"`
+}
+
+// FetchRoute reads one session's persisted routes.
+func (h *Hub) FetchRoute(ctx context.Context, profile, session string) (*SessionRoute, error) {
+	u := fmt.Sprintf("%s/route?profile=%s&session=%s", h.BaseURL, url.QueryEscape(profile), url.QueryEscape(session))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if h.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+h.Key)
+	}
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET /route: HTTP %d", resp.StatusCode)
+	}
+	var out SessionRoute
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if !out.OK {
+		if out.Error == "" {
+			out.Error = "unknown session"
+		}
+		return nil, errors.New(out.Error)
+	}
+	return &out, nil
+}
+
+// Ping checks the hub's unauthenticated liveness endpoint.
+func (h *Hub) Ping(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.BaseURL+"/health", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("hub /health: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // FetchChannels reads the native shape store (categories/channels/assignments)
 // for one profile.
 func (h *Hub) FetchChannels(ctx context.Context, profile string) (map[string]any, error) {

@@ -19,6 +19,8 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          # ONE version for every output (bundle chip, atlasd ldflags, pkgs)
+          atlasVersion = "0.21.0";
 
           # ── Web UI bundle ────────────────────────────────────────────────
           # The transport is a BUILD-TIME contract (vite define
@@ -27,11 +29,11 @@
           # (mode web).
           frontend = pkgs.buildNpmPackage {
             pname = "atlas-web";
-            version = "0.20.4";
+            version = atlasVersion;
             src = ./desktop/frontend;
             nodejs = pkgs.nodejs_22;
             # baked into the bundle (status bar version) via vite define
-            env.ATLAS_VERSION = "0.20.4";
+            env.ATLAS_VERSION = atlasVersion;
             npmDepsHash = "sha256-AZ/w0U6JtipUMy4KHtgzez7YgWw40P6NOII4T0wUosg=";
             npmBuildScript = "build:web";
             installPhase = ''
@@ -45,9 +47,10 @@
           # ── atlasd: the bridge daemon (pure Go) ──────────────────────────
           atlasd = pkgs.buildGoModule {
             pname = "atlasd";
-            version = "0.20.4";
+            version = atlasVersion;
             src = ./.;
             subPackages = [ "./cmd/atlasd" ];
+            ldflags = [ "-X main.version=${atlasVersion}" ];
             vendorHash = "sha256-uwBJAqN4sIepiiJf9lCDumLqfKJEowQO2tOiSWD3Fig=";
             env.CGO_ENABLED = 0;
             meta.mainProgram = "atlasd";
@@ -72,9 +75,10 @@
           # TUI + daemon: what head runs (historical shape, unchanged).
           default = pkgs.buildGoModule {
             pname = "atlas";
-            version = "0.20.4";
+            version = atlasVersion;
             src = ./.;
             subPackages = [ "." "./cmd/atlasd" ];
+            ldflags = [ "-X main.version=${atlasVersion}" ];
             vendorHash = "sha256-uwBJAqN4sIepiiJf9lCDumLqfKJEowQO2tOiSWD3Fig=";
             meta.mainProgram = "atlas";
           };
@@ -86,7 +90,7 @@
           # the store paths main.js discovers via ATLASD_BIN / ATLAS_WEB_DIR.
           atlas-electron = pkgs.stdenv.mkDerivation {
             pname = "atlas-electron";
-            version = "0.20.4";
+            version = atlasVersion;
             src = ./.;
 
             # Pure assembly derivation: everything is built by the deps.

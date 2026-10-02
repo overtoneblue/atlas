@@ -78,6 +78,14 @@ export type Message = {
   images?: string[];
 };
 
+// One upstream's reachability (configured is not the same as up).
+export type LinkHealth = {
+  configured: boolean;
+  up: boolean;
+  error?: string;
+  checked_at?: number;
+};
+
 export type Status = {
   api: boolean;
   hub: boolean;
@@ -87,6 +95,44 @@ export type Status = {
   serve_url?: string;
   // Live turns the daemon is currently running (attach targets).
   turns?: { session: string; profile: string }[];
+  // Real reachability per upstream (api / hub / serve), daemon identity.
+  links?: Record<string, LinkHealth>;
+  version?: string;
+  boot?: string;
+  uptime_s?: number;
+};
+
+// A chat's live snapshot from atlasd (serve's session.info + usage, or the
+// stored route when no runtime is bound). Zero values mean "unknown".
+export type SessionInfo = {
+  session: string;
+  profile?: string;
+  live?: boolean;
+  bound?: boolean;
+  model?: string;
+  provider?: string;
+  reasoning?: string;
+  service_tier?: string;
+  fast?: boolean;
+  context_used?: number;
+  context_max?: number;
+  context_percent?: number;
+  context_estimated?: boolean;
+  tps?: number;
+  latency_s?: number;
+  cache_hit_pct?: number;
+  calls?: number;
+  drift?: string; // stored route would resume on the wrong provider
+  healed?: string; // atlasd re-pinned the route (human text)
+  bind_error?: string;
+  updated_at?: number;
+};
+
+// A chat's most recent failed turn, as serve explained it.
+export type TurnFailure = {
+  error: string;
+  code?: string;
+  at: number;
 };
 
 // Live-turn attach (atlasd GET /api/turn): a client opening mid-turn
@@ -162,6 +208,7 @@ export type ModelRow = {
   slug: string;
   meta: string;
   current: boolean;
+  recent?: boolean; // one of the last few picks (floats to the top)
 };
 
 export type Row = {
@@ -206,8 +253,11 @@ export type ModalState = {
 };
 
 // One live-turn update, emitted by the Go side on "atlas:turn".
+// kinds: started | delta | reasoning | tool | done | error | stats | info |
+// note | link | resync | hello — plus the client-side "stream" (the event
+// stream itself went down / came back).
 export type TurnEvent = {
-  kind: "started" | "delta" | "tool" | "done" | "error" | string;
+  kind: string;
   session_id: string;
   profile?: string;
   text?: string;
@@ -217,8 +267,12 @@ export type TurnEvent = {
   ok?: boolean;
   stopped?: boolean;
   error?: string;
+  code?: string;
   tps?: number;
   latency_s?: number;
+  info?: SessionInfo;
+  link?: "up" | "down" | string;
+  boot?: string;
 };
 
 export type LiveSegment =

@@ -57,7 +57,19 @@
       title: "general",
       rows: [
         ["?", "this help"],
+        ["S", "settings — model · reasoning · fast · display · connection"],
+        ["M", "model picker for the open chat"],
+        ["R", "retry a failed turn (only when one is shown)"],
         ["ctrl+c", "stop the running turn (while streaming)"],
+      ],
+    },
+    {
+      title: "settings sheet",
+      rows: [
+        ["j / k", "move"],
+        ["h / l", "step a value (reasoning, display)"],
+        ["enter", "act / toggle"],
+        ["esc · q · S", "close"],
       ],
     },
     {

@@ -36,16 +36,7 @@ func TestSplitInput(t *testing.T) {
 }
 
 // newTestService builds a Service without dialing anything.
-func newTestService() *Service {
-	return &Service{
-		turns:     map[string]*activeTurn{},
-		subs:      map[int]chan TurnEvent{},
-		runtimes:  map[string]string{},
-		byRuntime: map[string]string{},
-		profileOf: map[string]string{},
-		lastSeq:   map[string]int64{},
-	}
-}
+func newTestService() *Service { return newBare() }
 
 func ev(sid, typ string, seq int64, payload string) hermes.ServeEvent {
 	return hermes.ServeEvent{Type: typ, SessionID: sid, Seq: seq, Payload: json.RawMessage(payload)}
@@ -158,10 +149,104 @@ func TestSessionInfoEmitsStats(t *testing.T) {
 	d.rtMu.Unlock()
 	// session.info lands at settle, when the turn is already gone — it must
 	// still relay (this is what feeds the tok/s readout).
-	d.onServeEvent(ev("r", "session.info", 1, `{"usage":{"avg_tps":41.7,"avg_latency_s":2.3}}`))
+	d.onServeEvent(ev("r", "session.info", 1, `{"model":"m1","provider":"p1","reasoning_effort":"high","usage":{"avg_tps":41.7,"avg_latency_s":2.3,"context_used":5000,"context_max":100000,"context_percent":5}}`))
 	got := drain(ch)
-	if len(got) != 1 || got[0].Kind != "stats" || got[0].TPS != 41.7 || got[0].Latency != 2.3 {
-		t.Fatalf("stats event = %+v", got)
+	if len(got) != 2 || got[0].Kind != "info" || got[1].Kind != "stats" || got[1].TPS != 41.7 || got[1].Latency != 2.3 {
+		t.Fatalf("events = %+v", got)
+	}
+	si := got[0].Info
+	if si == nil || si.Model != "m1" || si.Provider != "p1" || si.Reasoning != "high" || si.CtxPct != 5 || si.TPS != 41.7 {
+		t.Fatalf("info = %+v", si)
+	}
+	// a mid-turn usage tick without throughput keeps the last real reading
+	d.onServeEvent(ev("r", "session.usage", 2, `{"usage":{"context_used":6000,"context_max":100000,"context_percent":6}}`))
+	got = drain(ch)
+	if len(got) != 1 || got[0].Info == nil || got[0].Info.TPS != 41.7 || got[0].Info.CtxPct != 6 {
+		t.Fatalf("usage tick = %+v", got)
+	}
+}
+
+func TestFailedTurnIsRemembered(t *testing.T) {
+	d := newTestService()
+	ch, cancel := d.Subscribe()
+	defer cancel()
+	d.rtMu.Lock()
+	d.bindRuntimeLocked("s", "r")
+	d.rtMu.Unlock()
+	d.turns["s"] = &activeTurn{runtime: "r", done: make(chan struct{}), lastEvent: time.Now()}
+	d.onServeEvent(ev("r", "message.complete", 1,
+		`{"status":"error","error":"404 model","error_surface":{"code":"model_not_found","provider":"claude-sub","model":"deepseek-flash"}}`))
+	f := d.LastFailure("s")
+	if f == nil || f.Code != "model_not_found" || f.Error != "404 model (route: deepseek-flash · claude-sub)" {
+		t.Fatalf("failure = %+v", f)
+	}
+	var done *TurnEvent
+	for _, e := range drain(ch) {
+		e := e
+		if e.Kind == "done" {
+			done = &e
+		}
+	}
+	if done == nil || done.OK || done.Code != "model_not_found" || done.Error == "" {
+		t.Fatalf("done = %+v", done)
+	}
+	// a later successful turn clears it
+	d.turns["s"] = &activeTurn{runtime: "r", done: make(chan struct{}), lastEvent: time.Now()}
+	d.onServeEvent(ev("r", "message.complete", 2, `{"status":"complete"}`))
+	if d.LastFailure("s") != nil {
+		t.Fatal("success should clear the remembered failure")
+	}
+}
+
+func TestSlowSubscriberGetsResync(t *testing.T) {
+	d := newTestService()
+	ch, cancel := d.Subscribe()
+	defer cancel()
+	for i := 0; i < 2048+10; i++ { // overflow the buffer: frames drop, sub turns lossy
+		d.emit(TurnEvent{Kind: "delta", SessionID: "s", Text: "x"})
+	}
+	for i := 0; i < 2048; i++ { // reader catches up
+		<-ch
+	}
+	d.emit(TurnEvent{Kind: "done", SessionID: "s"})
+	got := drain(ch)
+	if len(got) != 2 || got[0].Kind != "resync" || got[1].Kind != "done" {
+		t.Fatalf("after loss: %+v", got)
+	}
+}
+
+func TestRouteDrift(t *testing.T) {
+	mk := func(model, topModel, topProv, nestedProv string) *hermes.SessionRoute {
+		return &hermes.SessionRoute{OK: true, Model: model,
+			Top:    hermes.RouteSide{Model: topModel, Provider: topProv},
+			Nested: hermes.RouteSide{Provider: nestedProv}}
+	}
+	for _, tc := range []struct {
+		name                string
+		rt                  *hermes.SessionRoute
+		liveModel, liveProv string
+		want                bool
+	}{
+		// the incident: Atlas picked deepseek-flash/deepseek, the Discord-era
+		// nested route (claude-sub) won the resume -> 404 every turn
+		{"atlas pick lost to nested", mk("deepseek-flash", "deepseek-flash", "deepseek", "claude-sub"), "deepseek-flash", "claude-sub", true},
+		// the gateway wrote last (model column is its model): nested is the truth
+		{"gateway wrote last", mk("gpt-6.1-sol", "deepseek-flash", "deepseek", "openai-codex"), "gpt-6.1-sol", "openai-codex", false},
+		// routes agree
+		{"consistent", mk("m", "m", "p", "p"), "m", "p", false},
+		// live already on the picked provider (resume did the right thing)
+		{"live already right", mk("m", "m", "p", "q"), "m", "p", false},
+		// no nested route at all (pure Atlas/desktop chat)
+		{"no nested", mk("m", "m", "p", ""), "m", "p", false},
+		// no top-level pick (pure gateway chat)
+		{"no top", mk("m", "", "", "q"), "m", "q", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, got := routeDrift(tc.rt, tc.liveModel, tc.liveProv)
+			if got != tc.want {
+				t.Fatalf("drift = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

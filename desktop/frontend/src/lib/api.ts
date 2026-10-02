@@ -11,8 +11,10 @@ import type {
   Message,
   ModelOptions,
   Session,
+  SessionInfo,
   SpawnList,
   Status as StatusT,
+  TurnFailure,
   TurnState,
 } from "./types";
 import { isWails } from "./transport";
@@ -121,3 +123,22 @@ export const FetchTurn = (sessionID: string): Promise<TurnState> => t.FetchTurn(
 // Delete a chat (session + transcript) from its profile's store.
 export const DeleteSession = (profile: string, sessionID: string): Promise<void> =>
   t.DeleteSession(profile, sessionID);
+
+// Live session snapshot (model · provider · reasoning · context · tok/s)
+// plus the chat's last remembered turn failure.
+export const FetchInfo = (
+  profile: string,
+  sessionID: string,
+): Promise<{ info: SessionInfo; last_failure?: TurnFailure | null }> => t.FetchInfo(profile, sessionID);
+
+// Warm a chat's runtime (resume + route guard) before the first send.
+export const Bind = (profile: string, sessionID: string): Promise<SessionInfo> =>
+  t.Bind(profile, sessionID);
+
+// One session-scoped setting (reasoning | fast) on the chat's runtime.
+export const SetConfig = (
+  profile: string,
+  sessionID: string,
+  key: string,
+  value: string,
+): Promise<Record<string, unknown>> => t.SetConfig(profile, sessionID, key, value);

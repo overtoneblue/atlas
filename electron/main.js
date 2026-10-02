@@ -171,6 +171,25 @@ async function main() {
     return { action: "deny" };
   });
 
+  // Self-heal the renderer: a crashed/killed renderer process or a failed
+  // load (atlasd restarting under us) used to leave a dead black window
+  // until the app was relaunched. Reload once the daemon answers again.
+  let healing = false;
+  const heal = async (why) => {
+    if (healing || !win) return;
+    healing = true;
+    console.error(`atlas: renderer ${why} — reloading when atlasd answers`);
+    await waitForDaemon(60000);
+    healing = false;
+    if (win && !win.isDestroyed()) win.loadURL(ORIGIN);
+  };
+  win.webContents.on("render-process-gone", (_e, d) => void heal(`gone (${d.reason})`));
+  win.webContents.on("did-fail-load", (_e, code, desc, _url, isMainFrame) => {
+    // -3 = ERR_ABORTED (a navigation superseded by another): not a failure
+    if (isMainFrame && code !== -3) void heal(`load failed (${code} ${desc})`);
+  });
+  win.on("unresponsive", () => console.error("atlas: renderer unresponsive"));
+
   win.on("closed", () => {
     win = null;
   });

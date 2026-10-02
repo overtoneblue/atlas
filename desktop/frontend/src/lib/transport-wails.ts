@@ -4,7 +4,7 @@
 import { DataService } from "../../bindings/atlas/desktop";
 import { Events } from "@wailsio/runtime";
 import type { ChannelStore, HubTree, Message, Session, SpawnList, Status as StatusT, TurnEvent, TurnState } from "./types";
-import type { Catalog, Completion, ExecResult, ModelOptions } from "./types";
+import type { Catalog, Completion, ExecResult, ModelOptions, SessionInfo, TurnFailure } from "./types";
 
 export async function Status(): Promise<StatusT> {
   return (await DataService.Status()) as StatusT;
@@ -128,6 +128,27 @@ export async function RestartDaemon(_force: boolean): Promise<void> {
 
 export async function StopTurn(sessionID: string): Promise<void> {
   await DataService.StopTurn(sessionID);
+}
+
+// Live session info / bind / settings need the atlasd shell.
+export async function FetchInfo(
+  _profile: string,
+  sessionID: string,
+): Promise<{ info: SessionInfo; last_failure?: TurnFailure | null }> {
+  return { info: { session: sessionID } };
+}
+
+export async function Bind(_profile: string, sessionID: string): Promise<SessionInfo> {
+  return { session: sessionID };
+}
+
+export async function SetConfig(
+  _profile: string,
+  _sessionID: string,
+  _key: string,
+  _value: string,
+): Promise<Record<string, unknown>> {
+  throw new Error("settings need the atlasd shell");
 }
 
 export async function InitialSession(): Promise<string> {

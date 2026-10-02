@@ -19,9 +19,11 @@ import type {
   ModelRow,
   Row,
   Session,
+  SessionInfo,
   SpawnItem,
   Status,
   TurnEvent,
+  TurnFailure,
 } from "./types";
 import * as api from "./api";
 import { buildRows, buildSessionRows } from "./tree";
@@ -74,7 +76,18 @@ export const s = $state({
   cursor: 0,
   sel: [] as string[], // marked row keys (multi-select)
   selAnchor: null as number | null, // shift+click anchor row index
-  stats: {} as Record<string, { tps?: number }>, // last session.info reading per session
+  // live session snapshots (model · provider · reasoning · context · tok/s)
+  info: {} as Record<string, SessionInfo>,
+  // last failed turn per chat (the real cause behind Hermes' canned row)
+  failures: {} as Record<string, TurnFailure>,
+  // link state: the atlasd event stream itself + atlasd's serve socket
+  link: { stream: true, serve: "" as "" | "up" | "down" },
+  boot: "", // atlasd process id (a change = the daemon restarted)
+  // settings panel (S · /settings)
+  settingsOpen: false,
+  settingsIdx: 0,
+  settingsBusy: "", // row id with a request in flight
+  settingsErr: "", // last failed change, shown inside the sheet
   collapsed: [] as string[], // fold keys (stable name paths)
   hideStale: localStorage.getItem(LS_STALE) !== "0",
   hiddenView: localStorage.getItem(LS_HIDDEN_VIEW) === "1",
@@ -156,6 +169,13 @@ export const lightboxRuntime: { close: (() => void) | null } = { close: null };
 
 const MSG_PAGE = 400;
 
+// when each chat was last marked busy locally (non-reactive): the status
+// poll may only clear a busy flag that is older than one poll round-trip,
+// so a turn that just started can't be un-flagged by a stale response.
+const busySince: Record<string, number> = {};
+// chats whose runtime this client already warmed this daemon lifetime
+const warmed = new Set<string>();
+
 function cleanMessages(ms: Message[]): Message[] {
   return ms
     .filter((m) => m.display_kind !== "hidden") // channel-guideline seeds: model-facing only
@@ -185,11 +205,15 @@ export const actions = {
   async boot() {
     try {
       s.status = await api.Status();
+      if (s.status?.boot) s.boot = s.status.boot;
       // Live turns already in flight server-side: flag them now so the tree
       // shows ◍ and opening one attaches mid-stream.
       if (s.status?.turns?.length) {
         const busy = { ...s.turnBusy };
-        for (const t of s.status.turns) busy[t.session] = true;
+        for (const t of s.status.turns) {
+          busy[t.session] = true;
+          busySince[t.session] = Date.now();
+        }
         s.turnBusy = busy;
       }
     } catch {
@@ -401,7 +425,14 @@ export const actions = {
     // unsent draft stays with the chat it was typed in.
     if (s.open && s.open.id !== id) {
       this.markRead(s.open.id);
-      s.drafts[s.open.id] = s.draft;
+      // with the model picker up, the composer holds "/model …" — the real
+      // draft is the one the picker parked
+      s.drafts[s.open.id] = s.modelPick ? pickerParkedDraft : s.draft;
+      if (s.modelPick) {
+        s.modelPick = null;
+        s.modelConfirm = null;
+        pickerParkedDraft = "";
+      }
     }
     s.open = { profile, id, title: node.name };
     if (switching) s.draft = s.drafts[id] ?? "";
@@ -426,6 +457,7 @@ export const actions = {
       s.modelPick = null;
       s.statusText = `${s.messages.length} messages · ${id}`;
       void this.attachTurn(id, profile);
+      void this.loadInfo(profile, id);
     } catch (e: unknown) {
       // A stale failure must not clear the chat the user moved to; only the
       // chat this load belongs to may report it.
@@ -453,6 +485,124 @@ export const actions = {
     } catch {
       /* keep the current transcript on refresh failure */
     }
+  },
+
+  // loadInfo pulls the chat's live snapshot (model · provider · reasoning ·
+  // context · tok/s, or the stored route when unbound) and its remembered
+  // last failure — so a reload still explains a failed turn.
+  async loadInfo(profile: string, id: string) {
+    try {
+      const r = await api.FetchInfo(profile, id);
+      if (r?.info) this.applyInfo(r.info);
+      if (r?.last_failure && !s.turnBusy[id]) {
+        s.failures = { ...s.failures, [id]: r.last_failure };
+      }
+      // The stored route would resume on a stale provider: bind now so the
+      // daemon's route guard repairs it before anything is typed.
+      if (r?.info?.drift && !r.info.live && s.open?.id === id) this.warmOpen();
+    } catch {
+      /* older daemon / offline: chips stay empty */
+    }
+  },
+
+  applyInfo(si: SessionInfo) {
+    if (!si?.session) return;
+    const prev = s.info[si.session];
+    // a stored-route description (the daemon marks those live:false) must
+    // never overwrite a live snapshot; optimistic local patches carry no
+    // live flag and always apply
+    if (prev?.live && si.live === false) return;
+    const next = { ...prev, ...si };
+    // the daemon omits empty fields: a live snapshot without a drift note
+    // means the route is fine now — an older stored-route warning must not
+    // linger through the merge
+    if (si.live) next.drift = si.drift ?? "";
+    s.info = { ...s.info, [si.session]: next };
+  },
+
+  // warm binds the open chat's runtime the moment the composer takes focus:
+  // the resume (an eager agent build) and the route guard run while you
+  // type, so the first send neither waits for them nor hits a stale route.
+  warmOpen() {
+    const open = s.open;
+    if (!open || warmed.has(open.id) || s.turnBusy[open.id]) return;
+    if (s.info[open.id]?.live) return;
+    warmed.add(open.id);
+    api.Bind(open.profile, open.id).then(
+      (si) => this.applyInfo(si),
+      () => warmed.delete(open.id), // let the next focus try again
+    );
+  },
+
+  // pollStatus refreshes link health and reconciles busy flags against the
+  // daemon's live turns — the safety net for a "done" lost while the event
+  // stream was down (a stuck busy flag blocks sending in that chat).
+  async pollStatus() {
+    let st: Status;
+    try {
+      st = await api.Status();
+    } catch {
+      s.status = null;
+      return;
+    }
+    s.status = st;
+    if (st.boot && s.boot && st.boot !== s.boot) {
+      s.boot = st.boot;
+      warmed.clear();
+      void this.resync("atlasd restarted");
+      return;
+    }
+    if (st.boot) s.boot = st.boot;
+    this.reconcileBusy(st.turns ?? []);
+  },
+
+  reconcileBusy(turns: { session: string; profile: string }[]) {
+    const live = new Set(turns.map((t) => t.session));
+    const next = { ...s.turnBusy };
+    let changed = false;
+    for (const t of turns) {
+      if (!next[t.session]) {
+        next[t.session] = true;
+        busySince[t.session] = Date.now();
+        changed = true;
+      }
+    }
+    for (const sid of Object.keys(next)) {
+      if (!next[sid] || live.has(sid)) continue;
+      if (Date.now() - (busySince[sid] ?? 0) < 8000) continue; // too fresh to judge
+      next[sid] = false;
+      changed = true;
+      if (s.live?.session === sid && s.open?.id === sid) {
+        s.live = null;
+        void this.refreshTranscript();
+        void this.loadInfo(s.open.profile, sid);
+      }
+    }
+    if (changed) s.turnBusy = next;
+  },
+
+  // resync re-reads everything the event stream may have carried while it
+  // was down (or after a daemon restart / dropped frames): live turns, the
+  // open transcript or its live block, and the chat's info.
+  async resync(why: string) {
+    try {
+      const st = await api.Status();
+      s.status = st;
+      if (st.boot) s.boot = st.boot;
+      for (const sid of Object.keys(busySince)) busySince[sid] = 0;
+      this.reconcileBusy(st.turns ?? []);
+    } catch {
+      return; // still down: the next stream/status edge retries
+    }
+    const open = s.open;
+    if (!open) return;
+    if (s.turnBusy[open.id]) await this.attachTurn(open.id, open.profile);
+    else {
+      if (s.live?.session === open.id) s.live = null;
+      await this.refreshTranscript();
+    }
+    void this.loadInfo(open.profile, open.id);
+    s.statusText = `resynced — ${why}`;
   },
 
   // attachTurn hydrates a mid-turn session: when a turn is already
@@ -1039,17 +1189,62 @@ export const actions = {
         ]
       : wireText;
 
+    busySince[open.id] = Date.now();
     try {
       await api.SendMessage(open.profile, open.id, payload);
       s.statusText = imgs.length
         ? `sent with ${imgs.length} image(s) — streaming…`
         : "streaming…";
     } catch (e: unknown) {
+      // Never lose a message: the echo goes, the draft (and images) come
+      // back, and the reason is pinned in the transcript — not just a
+      // status-bar line that the next event overwrites.
       s.messages = s.messages.filter((m) => m.id !== echoID);
-      s.draft = text;
-      s.attachments = imgs;
-      s.statusText = "send failed: " + errText(e);
+      if (s.open?.id === open.id) {
+        s.draft = text;
+        s.attachments = imgs;
+      } else {
+        s.drafts[open.id] = text;
+      }
+      const msg = errText(e);
+      s.statusText = "not sent: " + msg;
+      if (s.open?.id === open.id) this.pushNote(`not sent — ${msg}\nyour message is back in the composer`);
     }
+  },
+
+  // retryTurn re-runs the chat's last user message after a failure, via
+  // Hermes' own /retry (rewinds the failed turn, then hands the message
+  // back as a send) — falling back to resending the last user message.
+  async retryTurn() {
+    const open = s.open;
+    if (!open) return;
+    if (s.turnBusy[open.id]) {
+      s.statusText = "a turn is already running";
+      return;
+    }
+    s.statusText = "retrying…";
+    try {
+      const res = await api.ExecSlash(open.id, "/retry");
+      if (res.type === "send" && res.message) {
+        await this.sendRaw(res.message);
+        return;
+      }
+      this.foldExec(res, "/retry");
+    } catch (e: unknown) {
+      const last = [...s.messages].reverse().find((m) => m.role === "user" && m.content?.trim());
+      if (!last) {
+        s.statusText = "retry failed: " + errText(e);
+        return;
+      }
+      await this.sendRaw(last.content);
+    }
+  },
+
+  dismissFailure(id: string) {
+    if (!s.failures[id]) return;
+    const f = { ...s.failures };
+    delete f[id];
+    s.failures = f;
   },
 
   async stopTurn() {
@@ -1218,29 +1413,77 @@ export const actions = {
     ]);
     s.autoScroll += 1;
     s.stickBump += 1;
+    busySince[open.id] = Date.now();
     try {
       await api.SendMessage(open.profile, open.id, text);
       s.statusText = "streaming…";
     } catch (e: unknown) {
       s.messages = s.messages.filter((m) => m.id !== echoID);
-      s.statusText = "send failed: " + errText(e);
+      const msg = errText(e);
+      s.statusText = "not sent: " + msg;
+      if (s.open?.id === open.id) this.pushNote(`not sent — ${msg}`);
     }
   },
 
   // handleTurnEvent folds one "atlas:turn" event into UI state.
   handleTurnEvent(ev: TurnEvent) {
+    // stream / daemon-level frames first (no session)
+    switch (ev.kind) {
+      case "hello":
+        if (ev.link === "up" || ev.link === "down") s.link.serve = ev.link;
+        if (ev.boot && s.boot && ev.boot !== s.boot) {
+          s.boot = ev.boot;
+          warmed.clear();
+          void this.resync("atlasd restarted");
+        } else if (ev.boot) s.boot = ev.boot;
+        return;
+      case "stream":
+        s.link.stream = ev.link === "up";
+        if (ev.link === "up") void this.resync("event stream reconnected");
+        else s.statusText = "lost the atlasd event stream — reconnecting…";
+        return;
+      case "resync":
+        void this.resync("missed live events");
+        return;
+      case "link":
+        s.link.serve = ev.link === "up" ? "up" : "down";
+        if (ev.link === "up") {
+          warmed.clear(); // serve restarted: runtimes are new, re-warm on focus
+          void this.pollStatus();
+        }
+        return;
+    }
+
     const sid = ev.session_id;
+    if (!sid) return;
     if (ev.kind === "done") {
       s.turnBusy = { ...s.turnBusy, [sid]: false };
     } else if (ev.kind === "started" || ev.kind === "delta" || ev.kind === "tool") {
-      if (!s.turnBusy[sid]) s.turnBusy = { ...s.turnBusy, [sid]: true };
+      if (!s.turnBusy[sid]) {
+        s.turnBusy = { ...s.turnBusy, [sid]: true };
+        busySince[sid] = Date.now();
+      }
     }
 
     const openHere = s.open?.id === sid;
     switch (ev.kind) {
+      case "info":
+        if (ev.info) this.applyInfo({ ...ev.info, session: sid });
+        if (openHere && s.live?.session === sid && ev.info?.tps) s.live.tps = ev.info.tps;
+        return;
+      case "note":
+        // daemon-authored notices: route repairs, busy-elsewhere folds
+        if (openHere && ev.text) this.pushNote(ev.text);
+        else if (ev.text) s.statusText = ev.text;
+        return;
       case "started":
+        if (s.failures[sid]) {
+          const f = { ...s.failures };
+          delete f[sid];
+          s.failures = f;
+        }
         if (openHere) {
-          s.live = { session: sid, profile: ev.profile ?? "default", segments: [], error: "", tps: s.stats[sid]?.tps };
+          s.live = { session: sid, profile: ev.profile ?? "default", segments: [], error: "", tps: s.info[sid]?.tps };
           s.autoScroll += 1; // the live block lands below the echo — follow it down
         }
         break;
@@ -1289,7 +1532,8 @@ export const actions = {
         }
         break;
       case "stats":
-        if (ev.tps) s.stats = { ...s.stats, [sid]: { tps: ev.tps } };
+        // legacy frame (pre-info daemons): only the throughput reading
+        if (ev.tps && !s.info[sid]?.live) this.applyInfo({ session: sid, tps: ev.tps, latency_s: ev.latency_s });
         if (openHere && s.live && s.live.session === sid && ev.tps) s.live.tps = ev.tps;
         break;
       case "error":
@@ -1297,9 +1541,18 @@ export const actions = {
           s.live.error = ev.error ?? "error";
           s.autoScroll += 1;
         }
-        if (!openHere) s.statusText = `turn error in ${sid}: ${ev.error ?? "error"}`;
+        if (!openHere) s.statusText = `turn failed in another chat: ${ev.error ?? "error"}`;
         break;
-      case "done":
+      case "done": {
+        // A failed turn keeps its real cause on screen as a failure card —
+        // the transcript refresh only brings back Hermes' canned row.
+        if (ev.ok === false && !ev.stopped) {
+          const err = ev.error || (openHere ? s.live?.error : "") || "the turn failed";
+          s.failures = {
+            ...s.failures,
+            [sid]: { error: err, code: ev.code, at: Date.now() / 1000 },
+          };
+        }
         if (openHere) {
           s.live = null;
           void this.refreshTranscript();
@@ -1307,10 +1560,12 @@ export const actions = {
           s.statusText = ev.stopped
             ? "turn stopped"
             : ev.ok === false
-              ? "turn ended with errors"
+              ? "turn failed — R retries · M picks another model"
               : "turn complete";
+          s.stickBump += 1;
         }
         break;
+      }
       default:
         break;
     }
@@ -1348,6 +1603,106 @@ export const actions = {
   setFocus(f: Focus) {
     s.focus = f;
     s.mode = f === "composer" ? "INSERT" : "NORMAL";
+    if (f === "composer") this.warmOpen();
+  },
+
+  // ---- settings panel (S · /settings) ----------------------------------
+  // A keyboard-first sheet over the same session-scoped contracts the
+  // official desktop's settings use (model / reasoning / fast on the live
+  // runtime) plus Atlas' own view toggles and connection health.
+
+  openSettings() {
+    s.settingsOpen = true;
+    s.settingsIdx = 0;
+    s.settingsErr = "";
+    s.helpOpen = false;
+    // opened from the palette (INSERT): release the textarea, or keys the
+    // sheet doesn't own would type into the composer behind it
+    if (s.mode === "INSERT") s.mode = "NORMAL";
+    const o = s.open;
+    if (o) void this.loadInfo(o.profile, o.id);
+    void this.pollStatus();
+  },
+
+  closeSettings() {
+    s.settingsOpen = false;
+    s.settingsBusy = "";
+  },
+
+  settingsMove(dir: number) {
+    const n = settingsRows().length;
+    if (!n) return;
+    s.settingsIdx = (((s.settingsIdx + dir) % n) + n) % n;
+  },
+
+  // step: -1 / +1 = h/l (←/→); 0 = enter (activate / step forward)
+  async settingsAct(step: number) {
+    const row = settingsRows()[s.settingsIdx];
+    if (!row || row.disabled || s.settingsBusy) return;
+    const open = s.open;
+    switch (row.id) {
+      case "model":
+        this.closeSettings();
+        void this.openModelPicker();
+        return;
+      case "reasoning": {
+        if (!open) return;
+        const cur = (s.info[open.id]?.reasoning || "medium").toLowerCase();
+        const i = Math.max(0, REASONING_LEVELS.indexOf(cur));
+        const next = REASONING_LEVELS[(i + (step || 1) + REASONING_LEVELS.length) % REASONING_LEVELS.length];
+        await this.applySetting(open, "reasoning", next, () => {
+          this.applyInfo({ session: open.id, reasoning: next });
+        });
+        return;
+      }
+      case "fast": {
+        if (!open) return;
+        const on = !!s.info[open.id]?.fast;
+        const next = on ? "normal" : "fast";
+        await this.applySetting(open, "fast", next, () => {
+          this.applyInfo({ session: open.id, fast: !on, service_tier: on ? "" : "priority" });
+        });
+        return;
+      }
+      case "display":
+        if (step < 0) s.dispMode = (s.dispMode + 2) % 4; // one back (cycle adds one)
+        this.cycleDisplay();
+        return;
+      case "stale":
+        this.toggleStale();
+        return;
+      case "hidden":
+        this.toggleHiddenView();
+        return;
+      case "resync":
+        void this.resync("manual resync");
+        return;
+      case "restart":
+        this.closeSettings();
+        void this.restartDaemon(false);
+        return;
+      default:
+        return;
+    }
+  },
+
+  async applySetting(open: { profile: string; id: string }, key: string, value: string, optimistic: () => void) {
+    s.settingsBusy = key;
+    s.settingsErr = "";
+    s.statusText = `${key} → ${value}…`;
+    try {
+      await api.SetConfig(open.profile, open.id, key, value);
+      optimistic(); // serve's session.info follows on the stream and wins
+      s.statusText = `${key} → ${value} (this chat)`;
+    } catch (e: unknown) {
+      // e.g. "fast mode is not available for this model" — shown in the
+      // sheet itself (the status bar sits under the scrim)
+      const msg = errText(e).replace(/^rpc \d+:\s*/, "");
+      s.settingsErr = `${key}: ${msg}`;
+      s.statusText = `${key} failed: ` + msg;
+    } finally {
+      s.settingsBusy = "";
+    }
   },
 
   cycleFocus(dir: number) {
@@ -1358,6 +1713,10 @@ export const actions = {
   },
 
   escape() {
+    if (s.settingsOpen) {
+      this.closeSettings();
+      return;
+    }
     if (s.sel.length || s.selAnchor !== null) {
       this.clearSel();
       return;
@@ -1500,6 +1859,15 @@ export const actions = {
       s.statusText = "open a workstream first";
       return;
     }
+    if (s.modelPick) {
+      // already open but the composer lost focus (a click elsewhere): bring
+      // it back instead of doing nothing
+      this.setFocus("composer");
+      return;
+    }
+    // the picker borrows the composer: an in-progress message is parked and
+    // handed back on close/pick (it used to be wiped)
+    pickerParkedDraft = s.draft.startsWith("/model") ? "" : s.draft;
     s.modelPick = { session: open.id, rows: [], idx: 0, moved: false, loading: true, error: "" };
     s.draft = "/model ";
     this.setFocus("composer");
@@ -1543,7 +1911,8 @@ export const actions = {
   pickerClose() {
     s.modelPick = null;
     s.modelConfirm = null;
-    s.draft = "";
+    s.draft = pickerParkedDraft;
+    pickerParkedDraft = "";
     s.statusText = "";
   },
 
@@ -1576,8 +1945,13 @@ export const actions = {
       }
       s.modelConfirm = null;
       s.modelPick = null;
-      s.draft = "";
-      s.statusText = `model → ${r.value ?? row.name}`;
+      s.draft = pickerParkedDraft;
+      pickerParkedDraft = "";
+      rememberModel(row);
+      // optimistic chip update; serve's session.info follows and wins
+      this.applyInfo({ session: open.id, model: row.name, provider: row.slug || undefined, drift: "" });
+      if (s.failures[open.id]) s.statusText = `model → ${row.name} · R retries the failed turn`;
+      else s.statusText = `model → ${r.value ?? row.name}`;
     } catch (e: unknown) {
       s.statusText = "model switch failed: " + errText(e);
     }
@@ -1597,6 +1971,8 @@ export interface Command {
 
 export const COMMANDS: Command[] = [
   { name: "/help", desc: "keys + commands sheet", run: () => actions.toggleHelp() },
+  { name: "/settings", desc: "model · reasoning · fast · display · connection (S)", run: () => actions.openSettings() },
+  { name: "/resync", desc: "re-read live turns, transcript and links from atlasd", run: () => void actions.resync("manual resync") },
   { name: "/stop", desc: "stop the running turn", run: () => void actions.stopTurn() },
   { name: "/display", desc: "cycle display: reasoning · exact tools · quiet", run: () => actions.cycleDisplay() },
   { name: "/find", desc: "search the open transcript", run: () => actions.findStart() },
@@ -1630,6 +2006,121 @@ export const COMMANDS: Command[] = [
     run: () => void actions.openNewCategory(s.open?.profile ?? "default"),
   },
 ];
+
+// ---- settings sheet model ---------------------------------------------
+// Rows are derived from live state every render (no copies to go stale).
+// Chat rows act on the open chat's runtime through serve's session-scoped
+// config.set — a pick in one chat never rewrites config.yaml.
+
+export const REASONING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+export const DISPLAY_NAMES = ["full", "reasoning hidden", "exact tools", "quiet"];
+
+export type SettingsRow = {
+  id: string;
+  section: string;
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "" | "ok" | "bad" | "warn" | "accent";
+  disabled?: boolean;
+};
+
+function linkRow(id: string, label: string): SettingsRow {
+  const l = s.status?.links?.[id];
+  let up = l?.up;
+  if (id === "serve" && s.link.serve) up = s.link.serve === "up";
+  if (!s.status) return { id: "link-" + id, section: "connection", label, value: "atlasd unreachable", tone: "bad", disabled: true };
+  if (l && !l.configured) return { id: "link-" + id, section: "connection", label, value: "not configured", tone: "warn", disabled: true };
+  return {
+    id: "link-" + id,
+    section: "connection",
+    label,
+    value: up ? "connected" : "down",
+    hint: up ? undefined : l?.error,
+    tone: up ? "ok" : "bad",
+    disabled: true,
+  };
+}
+
+export function settingsRows(): SettingsRow[] {
+  const rows: SettingsRow[] = [];
+  const o = s.open;
+  const si = o ? s.info[o.id] : undefined;
+  if (o) {
+    rows.push({
+      id: "model",
+      section: "this chat",
+      label: "model",
+      value: si?.model ? `${si.model}${si.provider ? " · " + si.provider : ""}` : "—",
+      hint: si?.drift ? "⚠ " + si.drift : "enter opens the picker (M anywhere)",
+      tone: si?.drift ? "warn" : "accent",
+    });
+    rows.push({
+      id: "reasoning",
+      section: "this chat",
+      label: "reasoning",
+      value: si?.reasoning || "default",
+      hint: "h / l steps the effort · session-scoped",
+    });
+    rows.push({
+      id: "fast",
+      section: "this chat",
+      label: "fast mode",
+      value: si?.fast ? "on" : "off",
+      hint: "priority tier where the provider supports it",
+      tone: si?.fast ? "ok" : "",
+    });
+  }
+  rows.push({ id: "display", section: "view", label: "transcript", value: DISPLAY_NAMES[s.dispMode] ?? "full", hint: "h / l cycles (r anywhere)" });
+  rows.push({ id: "stale", section: "view", label: "stale chats (7d+)", value: s.hideStale ? "stowed" : "shown" });
+  rows.push({ id: "hidden", section: "view", label: "hidden chats", value: s.hiddenView ? "shown" : "stowed" });
+  rows.push({
+    id: "link-stream",
+    section: "connection",
+    label: "event stream",
+    value: s.link.stream ? "live" : "reconnecting…",
+    tone: s.link.stream ? "ok" : "bad",
+    disabled: true,
+  });
+  rows.push(linkRow("serve", "hermes-serve"));
+  rows.push(linkRow("api", "hermes api"));
+  rows.push(linkRow("hub", "atlas hub"));
+  rows.push({
+    id: "daemon",
+    section: "connection",
+    label: "atlasd",
+    value: s.status ? `${s.status.version ?? "?"} · up ${fmtUptime(s.status.uptime_s ?? 0)}` : "unreachable",
+    tone: s.status ? "" : "bad",
+    disabled: true,
+  });
+  rows.push({ id: "resync", section: "actions", label: "resync now", value: "enter", hint: "re-read live turns, transcript, links" });
+  rows.push({ id: "restart", section: "actions", label: "restart atlasd", value: "enter", hint: "refused while a turn is running" });
+  return rows;
+}
+
+function fmtUptime(sec: number): string {
+  if (sec < 90) return `${Math.round(sec)}s`;
+  if (sec < 5400) return `${Math.round(sec / 60)}m`;
+  if (sec < 172800) return `${(sec / 3600).toFixed(1)}h`;
+  return `${Math.round(sec / 86400)}d`;
+}
+
+// Failure hint: what to do about a failed turn, keyed off serve's
+// error_surface code (stable) with a text sniff as the fallback.
+export function failureHint(code: string | undefined, text: string): string {
+  const c = (code ?? "").toLowerCase();
+  const t = text.toLowerCase();
+  if (c === "send_failed") return "the message never reached hermes — check the connection, then retry";
+  if (c.includes("not_found") || c.includes("model") || /\b404\b/.test(t))
+    return "the provider rejected this model/route — pick another with M (or retry if it was a blip)";
+  if (c.includes("auth") || /\b40[13]\b/.test(t)) return "provider auth failed — the credential for this provider needs attention";
+  if (c.includes("rate") || /\b429\b/.test(t)) return "rate limited — give it a moment, then retry";
+  if (c.includes("context") || t.includes("context length") || t.includes("too long"))
+    return "the conversation is too large for this model — /compress or switch to a longer-context model";
+  if (c.includes("timeout") || t.includes("timed out")) return "the provider timed out — retry";
+  if (/\b5\d\d\b/.test(t) || c.includes("server") || c.includes("overload")) return "provider-side error — retry, or switch provider with M";
+  return "R retries · M switches model";
+}
 
 // One palette row: local commands run client-side; hermes entries run via
 // slash.exec on the daemon side.
@@ -1711,21 +2202,50 @@ export type ModelPickState = {
   error: string;
 };
 
-// One row per (provider, model). The current provider sorts to the top so
-// its models are reachable without filtering; the current model is marked.
+// The picker borrows the composer; the user's draft waits here meanwhile.
+let pickerParkedDraft = "";
+
+// Recently picked (model, provider) pairs float to the top of the picker —
+// the "easy model picker": the two or three models you actually switch
+// between are always one keystroke away.
+const LS_RECENT_MODELS = "atlas.recentModels";
+const RECENT_MAX = 6;
+
+function recentModels(): { name: string; slug: string }[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_RECENT_MODELS) || "[]");
+    return Array.isArray(v) ? v.filter((x) => x && typeof x.name === "string").slice(0, RECENT_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberModel(row: ModelRow) {
+  const next = [{ name: row.name, slug: row.slug }, ...recentModels().filter((r) => !(r.name === row.name && r.slug === row.slug))];
+  try {
+    localStorage.setItem(LS_RECENT_MODELS, JSON.stringify(next.slice(0, RECENT_MAX)));
+  } catch {
+    /* storage denied: recents are a nicety */
+  }
+}
+
+// One row per (provider, model): recents first (marked), then the current
+// provider, then the rest; providers serve reports as unauthenticated are
+// dropped (picking one can only fail). The current model is marked.
 function flattenModels(p: ModelOptions): ModelRow[] {
   const curModel = (p.model ?? "").trim();
   const curSlug = (p.provider ?? "").trim().toLowerCase();
   const providers = (p.providers ?? [])
+    .filter((prov) => prov.authenticated !== false)
     .slice()
     .sort((a, b) => Number(!!b.is_current) - Number(!!a.is_current));
-  const rows: ModelRow[] = [];
+  const all: ModelRow[] = [];
   for (const prov of providers) {
     const slug = prov.slug ?? "";
     const meta = prov.name ?? slug;
     for (const m of prov.models ?? []) {
       const name = String(m);
-      rows.push({
+      all.push({
         name,
         slug,
         meta,
@@ -1733,24 +2253,31 @@ function flattenModels(p: ModelOptions): ModelRow[] {
       });
     }
   }
-  return rows;
+  const rec = recentModels();
+  const key = (r: { name: string; slug: string }) => r.slug + "\u0000" + r.name;
+  const recKeys = new Set(rec.map(key));
+  const head: ModelRow[] = [];
+  for (const r of rec) {
+    const hit = all.find((x) => key(x) === key(r));
+    if (hit) head.push({ ...hit, recent: true });
+  }
+  return head.concat(all.filter((x) => !recKeys.has(key(x))));
 }
 
 // Rows the picker shows for the current draft. The draft is always of the
 // shape "/model <filter>" while the picker is open; anything after the
-// command filters name/provider/meta matches.
+// command filters — every whitespace-separated token must match the model,
+// provider slug or provider name ("opus or" → opus via openrouter).
 export function modelPickRows(draft: string): ModelRow[] {
   const mp = s.modelPick;
   if (!mp) return [];
   const m = /^\/model\s*(.*)$/i.exec(draft);
-  const q = (m ? m[1] : draft).trim().toLowerCase();
-  const rows = q
-    ? mp.rows.filter(
-        (r) =>
-          r.name.toLowerCase().includes(q) ||
-          r.slug.toLowerCase().includes(q) ||
-          r.meta.toLowerCase().includes(q),
-      )
+  const toks = (m ? m[1] : draft).trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = toks.length
+    ? mp.rows.filter((r) => {
+        const hay = `${r.name} ${r.slug} ${r.meta}`.toLowerCase();
+        return toks.every((t) => hay.includes(t));
+      })
     : mp.rows;
   return rows.slice(0, PALETTE_CAP);
 }

@@ -32,6 +32,9 @@ import (
 	"atlas/internal/hermes"
 )
 
+// version is stamped by the nix build (-ldflags -X main.version=…).
+var version = "dev"
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1", "bind address (loopback by default)")
 	port := flag.Int("port", 8644, "listen port")
@@ -45,6 +48,7 @@ func main() {
 	}
 
 	svc := daemon.New()
+	svc.SetVersion(version)
 	svc.Start() // serve event stream + stuck-turn watchdog
 	if *openSession != "" {
 		svc.SetInitialSession(*openSession)
@@ -88,6 +92,9 @@ func main() {
 	mux.HandleFunc("GET /api/complete", api.complete)
 	mux.HandleFunc("POST /api/exec", api.exec)
 	mux.HandleFunc("GET /api/models", api.models)
+	mux.HandleFunc("GET /api/info", api.info)
+	mux.HandleFunc("POST /api/bind", api.bind)
+	mux.HandleFunc("POST /api/config", api.config)
 	mux.HandleFunc("GET /media", api.media)
 	mux.HandleFunc("GET /api/events", api.events)
 
@@ -435,9 +442,74 @@ func (a *api) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 	case errors.Is(err, daemon.ErrBusy):
 		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, daemon.ErrUnreachable):
+		writeError(w, http.StatusServiceUnavailable, err)
 	default:
 		writeError(w, http.StatusInternalServerError, err)
 	}
+}
+
+// info is the session's live snapshot (model / provider / reasoning / fast /
+// context / tok/s) plus its last remembered turn failure.
+func (a *api) info(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	profile, session := q.Get("profile"), q.Get("session")
+	if session == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session is required"))
+		return
+	}
+	if profile == "" {
+		profile = "default"
+	}
+	writeJSON(w, map[string]any{
+		"info":         a.svc.Info(profile, session),
+		"last_failure": a.svc.LastFailure(session),
+	})
+}
+
+// bind warms a chat's live runtime (resume + route guard) ahead of the first
+// send — the UI fires it when the composer is focused.
+func (a *api) bind(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Profile string `json:"profile"`
+		Session string `json:"session"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Session == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session is required"))
+		return
+	}
+	if req.Profile == "" {
+		req.Profile = "default"
+	}
+	si, err := a.svc.Bind(req.Profile, req.Session)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, si)
+}
+
+// config runs one session-scoped setting (reasoning | fast) on the chat.
+func (a *api) config(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Profile string `json:"profile"`
+		Session string `json:"session"`
+		Key     string `json:"key"`
+		Value   string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Session == "" || req.Key == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session and key are required"))
+		return
+	}
+	if req.Profile == "" {
+		req.Profile = "default"
+	}
+	res, err := a.svc.SetConfig(req.Profile, req.Session, req.Key, req.Value)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, res)
 }
 
 func (a *api) stop(w http.ResponseWriter, r *http.Request) {
@@ -519,18 +591,27 @@ func (a *api) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, ": atlasd event stream\n\n")
-	flusher.Flush()
+	// retry hint for EventSource clients: reconnect fast after a restart
+	fmt.Fprint(w, "retry: 1500\n\n")
 
 	ch, cancel := a.svc.Subscribe()
 	defer cancel()
+	// hello first: boot id (daemon restarted?) + live serve link state
+	if b, err := json.Marshal(a.svc.Hello()); err == nil {
+		fmt.Fprintf(w, "event: turn\ndata: %s\n\n", b)
+	}
+	flusher.Flush()
 
-	tick := time.NewTicker(20 * time.Second)
+	tick := time.NewTicker(15 * time.Second)
 	defer tick.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case ev := <-ch:
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
 			b, err := json.Marshal(ev)
 			if err != nil {
 				continue

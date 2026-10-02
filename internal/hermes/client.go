@@ -301,6 +301,23 @@ func (c *Client) DeleteSession(ctx context.Context, profile, id string) error {
 	return nil
 }
 
+// Ping checks the API server's unauthenticated /health endpoint.
+func (c *Client) Ping(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/health", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("api /health: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (c *Client) get(ctx context.Context, u, key string, dst any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {

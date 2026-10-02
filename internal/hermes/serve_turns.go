@@ -24,11 +24,58 @@ type ServeEvent struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
-// ResumeInfo is what a resume tells Atlas: the live runtime id and whether a
-// turn is in flight there right now.
+// ResumeInfo is what a resume tells Atlas: the live runtime id, whether a
+// turn is in flight there right now, and the runtime's live settings
+// snapshot (serve's session.info shape: model, provider, reasoning, usage…).
 type ResumeInfo struct {
 	Runtime string
 	Running bool
+	Info    json.RawMessage
+}
+
+// LiveInfo is the slice of serve's session.info payload Atlas reads. Every
+// field is optional on purpose: serve's info grows release to release and
+// Atlas must keep working when a field is renamed or dropped.
+type LiveInfo struct {
+	Model           string     `json:"model"`
+	Provider        string     `json:"provider"`
+	ReasoningEffort string     `json:"reasoning_effort"`
+	ServiceTier     string     `json:"service_tier"`
+	Fast            bool       `json:"fast"`
+	Running         bool       `json:"running"`
+	Title           string     `json:"title"`
+	ProfileName     string     `json:"profile_name"`
+	Contract        int        `json:"desktop_contract"`
+	Usage           *LiveUsage `json:"usage"`
+}
+
+// LiveUsage is the usage snapshot serve attaches to session.info /
+// session.usage / message.complete (the CLI status-bar numbers).
+type LiveUsage struct {
+	Model          string  `json:"model"`
+	Input          int64   `json:"input"`
+	Output         int64   `json:"output"`
+	Total          int64   `json:"total"`
+	Calls          int64   `json:"calls"`
+	ContextUsed    int64   `json:"context_used"`
+	ContextMax     int64   `json:"context_max"`
+	ContextPercent float64 `json:"context_percent"`
+	ContextEst     bool    `json:"context_estimated"`
+	CacheHitPct    float64 `json:"cache_hit_pct"`
+	AvgTPS         float64 `json:"avg_tps"`
+	AvgLatency     float64 `json:"avg_latency_s"`
+}
+
+// ParseLiveInfo decodes a session.info payload leniently (nil on garbage).
+func ParseLiveInfo(raw json.RawMessage) *LiveInfo {
+	if len(raw) == 0 {
+		return nil
+	}
+	var li LiveInfo
+	if json.Unmarshal(raw, &li) != nil {
+		return nil
+	}
+	return &li
 }
 
 // ResumeWith revives a stored session as a live runtime (attaching THIS
@@ -50,7 +97,20 @@ func (s *Serve) ResumeWith(ctx context.Context, sessionID, profile string) (Resu
 	if err := s.call(ctx, "session.resume", params, &out); err != nil {
 		return ResumeInfo{}, err
 	}
-	return ResumeInfo{Runtime: out.SessionID, Running: out.Running}, nil
+	return ResumeInfo{Runtime: out.SessionID, Running: out.Running, Info: out.Info}, nil
+}
+
+// ConfigSet runs one session-scoped config.set (reasoning, fast, …) against
+// a live runtime — the same contract the official desktop's settings use.
+// Session-scoped keys never touch config.yaml: a pick in one chat stays in
+// that chat.
+func (s *Serve) ConfigSet(ctx context.Context, runtimeID, key, value string) (map[string]any, error) {
+	params := map[string]any{"key": key, "value": value, "session_id": runtimeID}
+	var out map[string]any
+	if err := s.call(ctx, "config.set", params, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Submit sends one user turn to a live runtime. Status is streaming | queued
@@ -200,10 +260,18 @@ func (s *Serve) EventsSince(ctx context.Context, runtimeID string, lastSeen int6
 // receiver: onEvent fires per event frame (from the read loop — it must not
 // block or make RPCs), onReconnect fires in its own goroutine each time the
 // connection is re-established after a drop (resume + resync running turns).
-func (s *Serve) Watch(onEvent func(ServeEvent), onReconnect func()) {
+//
+// onState (optional) fires on every up/down edge so clients can show the real
+// link state instead of "a token is configured".
+func (s *Serve) Watch(onEvent func(ServeEvent), onReconnect func(), onState func(up bool)) {
 	s.mu.Lock()
 	s.onEvent = onEvent
 	s.mu.Unlock()
+	state := func(up bool) {
+		if onState != nil {
+			onState(up)
+		}
+	}
 	go func() {
 		backoff := time.Second
 		var last *wsConn
@@ -224,12 +292,16 @@ func (s *Serve) Watch(onEvent func(ServeEvent), onReconnect func()) {
 				continue
 			}
 			backoff, warned = time.Second, false
+			state(true)
 			if last != nil && conn != last && onReconnect != nil {
 				log.Printf("atlasd: serve connection re-established")
 				go onReconnect()
 			}
 			last = conn
 			<-conn.closed
+			s.noteErr(conn.closeErr())
+			s.dropIf(conn)
+			state(false)
 			time.Sleep(300 * time.Millisecond)
 		}
 	}()

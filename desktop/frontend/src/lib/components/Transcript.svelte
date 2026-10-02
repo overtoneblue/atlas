@@ -1,9 +1,41 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { s, actions } from "../state.svelte";
+  import { s, actions, failureHint } from "../state.svelte";
   import { mdLite, timeHM, toolGlyph, firstLine } from "../format";
+  import type { Message } from "../types";
   import { findRuntime } from "../find";
   import { copyImageToClipboard, downloadImage, imageFileName } from "../imgtools";
+
+  // Hermes-authored rows that are not anyone's words: the failed-turn
+  // boundary ("Your request was not processed…") and model-facing system
+  // notices (model switches, process/delegation completions, gateway
+  // notes). They render as quiet system lines, not as a chat bubble.
+  const FAILED_TEXT = [
+    "Your request was not processed. Send it again if you still want me to carry it out.",
+    "This turn did not complete. Some actions may already have run; verify their effects before resending.",
+  ];
+  const SYS_KINDS = new Set([
+    "model_switch",
+    "internal_notification",
+    "process_complete",
+    "async_delegation_complete",
+    "auto_continue",
+    "personality_switch",
+  ]);
+  function rowKind(m: Message): "failed" | "sys" | "" {
+    if (m.display_kind === "failed_turn") return "failed";
+    if (m.role === "assistant" && FAILED_TEXT.includes((m.content ?? "").trim())) return "failed";
+    if (m.display_kind && SYS_KINDS.has(m.display_kind)) return "sys";
+    return "";
+  }
+  // "[System: The active model … has changed to X via provider Y. …]" -> one line
+  function sysLine(m: Message): string {
+    const t = (m.content ?? "").replace(/^\[(system|important)[^:]*:\s*/i, "").replace(/\]\s*$/, "");
+    return firstLine(t);
+  }
+
+  const failure = $derived(s.open ? s.failures[s.open.id] : undefined);
+  const openInfo = $derived(s.open ? s.info[s.open.id] : undefined);
 
   let scroller = $state<HTMLDivElement | null>(null);
   let findInput = $state<HTMLInputElement | null>(null);
@@ -257,7 +289,9 @@
   {#if s.open}
     <div class="chat-head">
       <span class="title" title={s.open.title}>{s.open.title}</span>
-      <span class="dim">{s.open.id}</span>
+      <span class="spacer"></span>
+      {#if s.turnBusy[s.open.id]}<span class="head-live">● streaming</span>{/if}
+      <span class="dim" title="session id">{s.open.profile !== "default" ? s.open.profile + " · " : ""}{s.open.id}</span>
     </div>
     {#if s.findOpen}
       <div class="findbar">
@@ -287,7 +321,19 @@
         <div class="pad dim">loading older…</div>
       {/if}
       {#each s.messages as m, i (m.id)}
-        {#if m.tool_name}
+        {#if rowKind(m) === "failed"}
+          <div class="sysrow failed" data-mi={i} class:vs={inVisual(i)} title={m.content}>
+            <span class="sysglyph">✗</span>
+            <span class="systext">turn not completed</span>
+            <span class="time">{timeHM(m.timestamp)}</span>
+          </div>
+        {:else if rowKind(m) === "sys"}
+          <div class="sysrow" data-mi={i} class:vs={inVisual(i)} title={m.content}>
+            <span class="sysglyph">·</span>
+            <span class="systext">{sysLine(m)}</span>
+            <span class="time">{timeHM(m.timestamp)}</span>
+          </div>
+        {:else if m.tool_name}
           {#if s.dispMode !== 3}
             <div class="tool" data-mi={i} class:vs={inVisual(i)} class:exact={s.dispMode === 2}>
               <span class="tname">{toolGlyph(m.tool_name)} {m.tool_name}</span>
@@ -369,6 +415,35 @@
           {/each}
           {#if s.live.error}<div class="body live-err">{s.live.error}</div>{/if}
           {#if s.live.segments.length === 0}<div class="body dim">…thinking</div>{/if}
+        </div>
+      {/if}
+      {#if failure && !(s.live && s.live.session === s.open.id)}
+        <div class="failcard">
+          <div class="fc-head">
+            <span class="fc-glyph">✗</span>
+            <span class="fc-title">turn failed</span>
+            <span class="time">{timeHM(failure.at)}</span>
+            {#if failure.code}<span class="fc-code">{failure.code}</span>{/if}
+          </div>
+          <div class="fc-err">{failure.error}</div>
+          <div class="fc-hint">{failureHint(failure.code, failure.error)}</div>
+          <div class="fc-actions">
+            <button class="fc-btn primary" onclick={(e) => (e.stopPropagation(), void actions.retryTurn())}
+              ><kbd>R</kbd> retry</button
+            >
+            <button class="fc-btn" onclick={(e) => (e.stopPropagation(), void actions.openModelPicker())}
+              ><kbd>M</kbd> switch model</button
+            >
+            <button class="fc-btn ghost" onclick={(e) => (e.stopPropagation(), actions.dismissFailure(s.open?.id ?? ""))}
+              >dismiss</button
+            >
+          </div>
+        </div>
+      {/if}
+      {#if openInfo?.drift && !failure}
+        <div class="driftcard">
+          <span class="fc-glyph">⚠</span>
+          <span>this chat {openInfo.drift} — it is repaired automatically when you focus the composer</span>
         </div>
       {/if}
       {#if s.messages.length === 0 && !s.loadingOpen && !s.live}
